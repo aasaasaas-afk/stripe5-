@@ -2,14 +2,15 @@ import requests
 import random
 import string
 import json
-import os
+import logging
 from flask import Flask, jsonify, request
-from dotenv import load_dotenv
-
-# Load environment variables
-load_dotenv()
+from urllib.parse import unquote
 
 app = Flask(__name__)
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 def generate_random_string(length=10):
     return ''.join(random.choices(string.ascii_lowercase + string.digits, k=length))
@@ -64,7 +65,7 @@ def make_donation(cc_input, email, name, amount=5):
         'card[number]': card_details['number'],
         'card[cvc]': card_details['cvc'],
         'card[exp_month]': card_details['exp_month'],
-        'card[exp_year]': card_details['exp_year'],  # Fixed syntax error
+        'card[exp_year]': card_details['exp_year'],
         'guid': guid,
         'muid': muid,
         'sid': sid,
@@ -72,7 +73,7 @@ def make_donation(cc_input, email, name, amount=5):
         'payment_user_agent': 'stripe.js/f5ddf352d5; stripe-js-v3/f5ddf352d5; card-element',
         'referrer': 'https://www.charitywater.org',
         'time_on_page': str(random.randint(700000, 800000)),
-        'key': 'pk_live_51049Hm4QFaGycgRKOIbupRw7rf65FJESmPqWZk9Jtpf2YCvxnjMAFX7dOPAgoxv9M2wwhi5OwFBx1EzuoTxNzLJD00ViBbMvkQ',  # Use environment variable
+        'key': 'pk_live_51049Hm4QFaGycgRKpWt6KEA9QxP8gjo8sbC6f2qvl4OnzKUZ7W0l00vlzcuhJBjX5wyQaAJxSPZ5k72ZONiXf2Za00Y1jRrMhU',
     }
 
     try:
@@ -164,26 +165,21 @@ def make_donation(cc_input, email, name, amount=5):
     except Exception as e:
         return {"status": "declined", "message": f"An error occurred: {str(e)}"}
 
-@app.route('/donate', methods=['POST'])
-def handle_donation():
+@app.route('/gateway=stripe5$/key=rocky/cc=<cc>', methods=['GET'])
+def handle_donation(cc):
     try:
-        # Expect JSON payload with cc, email, name, and optional amount
-        data = request.get_json()
-        if not data or 'cc' not in data or 'email' not in data or 'name' not in data:
-            return jsonify({"status": "declined", "message": "Missing required fields: cc, email, name"}), 400
-        
-        cc = data['cc']
-        email = data['email']
-        name = data['name']
-        amount = data.get('amount', 5)  # Default to 5 if not provided
-        
-        result = make_donation(cc, email, name, amount)
+        # Decode the cc parameter to handle URL-encoded characters
+        decoded_cc = unquote(cc)
+        logger.info(f"Received request with cc: {decoded_cc}")
+        result = make_donation(decoded_cc, "darkboy3366@gmail.com", "Dark Boy")
         return jsonify(result)
     except Exception as e:
+        logger.error(f"Server error: {str(e)}")
         return jsonify({"status": "declined", "message": f"Server error: {str(e)}"}), 500
 
 @app.errorhandler(404)
 def page_not_found(e):
+    logger.warning(f"404 error: {str(e)}")
     return jsonify({"status": "declined", "message": "Invalid endpoint or parameters"}), 404
 
 if __name__ == '__main__':
