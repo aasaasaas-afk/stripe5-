@@ -24,7 +24,7 @@ def make_donation(cc_input, email, name, amount=5):
     try:
         card_details = process_credit_card(cc_input)
     except ValueError as e:
-        return {"success": False, "message": str(e)}
+        return {"message": str(e)}
     
     # Generate fresh session identifiers
     muid = f"{generate_random_string(8)}-{generate_random_string(4)}-{generate_random_string(4)}-{generate_random_string(4)}-{generate_random_string(12)}"
@@ -77,13 +77,13 @@ def make_donation(cc_input, email, name, amount=5):
         )
         
         if stripe_response.status_code != 200:
-            return {"success": False, "message": "Stripe payment method creation failed", "response": stripe_response.text}
+            return {"message": "Stripe payment method creation failed", "response": stripe_response.text}
         
         payment_method = stripe_response.json()
         payment_method_id = payment_method.get('id')
         
         if not payment_method_id:
-            return {"success": False, "message": "Could not get payment method ID from Stripe"}
+            return {"message": "Could not get payment method ID from Stripe"}
        
         donation_headers = {
             'accept': '*/*',
@@ -141,19 +141,24 @@ def make_donation(cc_input, email, name, amount=5):
         )
         
         if donation_response.status_code == 200:
-            return {"success": True, "message": "Donation successful"}
+            return {"message": "Donation successful"}
         else:
-            return {"success": False, "message": "Donation submission failed", "response": donation_response.text}
+            return {"message": "Donation submission failed", "response": donation_response.text}
             
     except Exception as e:
-        return {"success": False, "message": f"An error occurred: {str(e)}"}
+        return {"message": f"An error occurred: {str(e)}"}
 
 @app.route('/gateway=stripe5$/key=rocky/cc=<cc>', methods=['GET'])
 def handle_donation(cc):
-    # Note: In Flask, dynamic path parameters are captured here as 'cc'
-    # The full URL would be like https://yourdomain.com/gateway=stripe5$/key=rocky/cc=4111111111111111|12|2025|123
-    result = make_donation(cc, "darkboy3366@gmail.com", "Dark Boy")
-    return jsonify(result)
+    try:
+        result = make_donation(cc, "darkboy3366@gmail.com", "Dark Boy")
+        return jsonify(result)
+    except Exception as e:
+        return jsonify({"message": f"Server error: {str(e)}"}), 500
+
+@app.errorhandler(404)
+def page_not_found(e):
+    return jsonify({"message": "Invalid endpoint or parameters"}), 404
 
 if __name__ == '__main__':
     app.run(debug=True)
