@@ -2,7 +2,12 @@ import requests
 import random
 import string
 import json
+import os
 from flask import Flask, jsonify, request
+from dotenv import load_dotenv
+
+# Load environment variables
+load_dotenv()
 
 app = Flask(__name__)
 
@@ -59,7 +64,7 @@ def make_donation(cc_input, email, name, amount=5):
         'card[number]': card_details['number'],
         'card[cvc]': card_details['cvc'],
         'card[exp_month]': card_details['exp_month'],
-        'card[exp_year]': card_details['['exp_year'],
+        'card[exp_year]': card_details['exp_year'],  # Fixed syntax error
         'guid': guid,
         'muid': muid,
         'sid': sid,
@@ -67,7 +72,7 @@ def make_donation(cc_input, email, name, amount=5):
         'payment_user_agent': 'stripe.js/f5ddf352d5; stripe-js-v3/f5ddf352d5; card-element',
         'referrer': 'https://www.charitywater.org',
         'time_on_page': str(random.randint(700000, 800000)),
-        'key': 'pk_live_51049Hm4QFaGycgRKOIbupRw7rf65FJESmPqWZk9Jtpf2YCvxnjMAFX7dOPAgoxv9M2wwhi5OwFBx1EzuoTxNzLJD00ViBbMvkQ',
+        'key': os.getenv('STRIPE_API_KEY'),  # Use environment variable
     }
 
     try:
@@ -159,10 +164,20 @@ def make_donation(cc_input, email, name, amount=5):
     except Exception as e:
         return {"status": "declined", "message": f"An error occurred: {str(e)}"}
 
-@app.route('/gateway=stripe5$/key=rocky/cc=<cc>', methods=['GET'])
-def handle_donation(cc):
+@app.route('/donate', methods=['POST'])
+def handle_donation():
     try:
-        result = make_donation(cc, "darkboy3366@gmail.com", "Dark Boy")
+        # Expect JSON payload with cc, email, name, and optional amount
+        data = request.get_json()
+        if not data or 'cc' not in data or 'email' not in data or 'name' not in data:
+            return jsonify({"status": "declined", "message": "Missing required fields: cc, email, name"}), 400
+        
+        cc = data['cc']
+        email = data['email']
+        name = data['name']
+        amount = data.get('amount', 5)  # Default to 5 if not provided
+        
+        result = make_donation(cc, email, name, amount)
         return jsonify(result)
     except Exception as e:
         return jsonify({"status": "declined", "message": f"Server error: {str(e)}"}), 500
