@@ -1,6 +1,7 @@
 import requests
 import random
 import string
+import json
 from flask import Flask, jsonify, request
 
 app = Flask(__name__)
@@ -58,7 +59,7 @@ def make_donation(cc_input, email, name, amount=5):
         'card[number]': card_details['number'],
         'card[cvc]': card_details['cvc'],
         'card[exp_month]': card_details['exp_month'],
-        'card[exp_year]': card_details['exp_year'],
+        'card[exp_year']': card_details['exp_year'],
         'guid': guid,
         'muid': muid,
         'sid': sid,
@@ -77,7 +78,14 @@ def make_donation(cc_input, email, name, amount=5):
         )
         
         if stripe_response.status_code != 200:
-            return {"message": "Stripe payment method creation failed", "response": stripe_response.text}
+            try:
+                # Try to parse the response as JSON to get clean error message
+                error_data = stripe_response.json()
+                error_message = error_data.get('error', {}).get('message', 'Stripe payment method creation failed')
+                return {"message": error_message}
+            except:
+                # If JSON parsing fails, return the raw text
+                return {"message": "Stripe payment method creation failed", "response": stripe_response.text}
         
         payment_method = stripe_response.json()
         payment_method_id = payment_method.get('id')
@@ -143,7 +151,22 @@ def make_donation(cc_input, email, name, amount=5):
         if donation_response.status_code == 200:
             return {"message": "Donation successful"}
         else:
-            return {"message": "Donation submission failed", "response": donation_response.text}
+            try:
+                # Try to parse the donation response as JSON to get clean error details
+                response_data = donation_response.json()
+                if 'error' in response_data:
+                    error_message = response_data['error'].get('message', 'Donation submission failed')
+                    error_code = response_data['error'].get('code', '')
+                    return {
+                        "message": error_message,
+                        "response": {"code": error_code}
+                    }
+                else:
+                    # If no error field, return the entire response
+                    return {"message": "Donation submission failed", "response": response_data}
+            except json.JSONDecodeError:
+                # If JSON parsing fails, return the raw text
+                return {"message": "Donation submission failed", "response": donation_response.text}
             
     except Exception as e:
         return {"message": f"An error occurred: {str(e)}"}
