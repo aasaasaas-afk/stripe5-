@@ -72,7 +72,7 @@ def make_donation(cc_input, email, name, amount=5):
         'payment_user_agent': 'stripe.js/f5ddf352d5; stripe-js-v3/f5ddf352d5; card-element',
         'referrer': 'https://www.charitywater.org',
         'time_on_page': str(random.randint(700000, 800000)),
-        'key': os.getenv('STRIPE_API_KEY'),  # Use environment variable
+        'key': 'pk_live_51049Hm4QFaGycgRKOIbupRw7rf65FJESmPqWZk9Jtpf2YCvxnjMAFX7dOPAgoxv9M2wwhi5OwFBx1EzuoTxNzLJD00ViBbMvkQ',  # Use environment variable
     }
 
     try:
