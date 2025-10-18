@@ -1,16 +1,11 @@
-import os
 import requests
 from flask import Flask, request
-from dotenv import load_dotenv
 import stripe
-
-# Load environment variables
-load_dotenv()
 
 app = Flask(__name__)
 
-# Configure Stripe with API key from environment variable
-stripe.api_key = os.getenv("STRIPE_SECRET_KEY")
+# Hardcoded Stripe API key
+stripe.api_key = "pk_live_51LwocDFHMGxIu0Ep6mkR59xgelMzyuFAnVQNjVXgygtn8KWHs9afEIcCogfam0Pq6S5ADG2iLaXb1L69MINGdzuO00gFUK9D0e"
 
 def process_payment(card_input):
     try:
@@ -50,7 +45,13 @@ def process_payment(card_input):
         except stripe.error.StripeError as e:
             return f"Error: {e.user_message or 'Payment method creation failed'}"
 
-        # Prepare data for the external API request
+        # Hardcoded cookies and headers
+        cookies = {
+            'crumb': 'BZuPjds1rcltODIxYmZiMzc3OGI0YjkyMDM0YzZhM2RlNDI1MWE1',
+            '__stripe_mid': '3c19adce-ab63-41bc-a086-f6840cd1cb6d361f48',
+            '__stripe_sid': '9d45db81-2d1e-436a-b832-acc8b6abac4814eb67',
+        }
+
         headers = {
             'authority': 'www.onamissionkc.org',
             'accept': 'application/json, text/plain, */*',
@@ -58,13 +59,7 @@ def process_payment(card_input):
             'origin': 'https://www.onamissionkc.org',
             'referer': 'https://www.onamissionkc.org/checkout?cartToken=OBEUbArW4L_xPlSD9oXFJrWCGoeyrxzx4MluNUza',
             'user-agent': 'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Mobile Safari/537.36',
-            'x-csrf-token': os.getenv("CSRF_TOKEN", "BZuPjds1rcltODIxYmZiMzc3OGI0YjkyMDM0YzZhM2RlNDI1MWE1"),
-        }
-
-        cookies = {
-            'crumb': os.getenv("CRUMB_TOKEN", "BZuPjds1rcltODIxYmZiMzc3OGI0YjkyMDM0YzZhM2RlNDI1MWE1"),
-            '__stripe_mid': os.getenv("STRIPE_MID", "3c19adce-ab63-41bc-a086-f6840cd1cb6d361f48"),
-            '__stripe_sid': os.getenv("STRIPE_SID", "9d45db81-2d1e-436a-b832-acc8b6abac4814eb67"),
+            'x-csrf-token': 'BZuPjds1rcltODIxYmZiMzc3OGI0YjkyMDM0YzZhM2RlNDI1MWE1',
         }
 
         json_data = {
@@ -149,4 +144,4 @@ def gateway():
 
 if __name__ == "__main__":
     print("Starting Stripe Payment Gateway")
-    app.run(host="0.0.0.0", port=int(os.getenv("PORT", 5000)), debug=False)
+    app.run(host="0.0.0.0", port=10000, debug=False)
