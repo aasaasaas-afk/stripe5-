@@ -1,4 +1,4 @@
-from flask import Flask, request, jsonify
+from flask import Flask, jsonify
 import requests
 import logging
 import os
@@ -171,13 +171,12 @@ def process_payment(ccn, mm, yy, cvc):
         return f"Error: Unexpected issue - {str(e)}"
 
 @app.route('/gateway=stripe5$/key=rocky/cc=<card_details>', methods=['GET'])
-def payment_gateway():
+def payment_gateway(card_details):
     try:
-        card_input = request.args.get('card_details', '')
-        if not card_input:
+        if not card_details:
             return jsonify({"status": "error", "response": "Missing card_details parameter"}), 400
 
-        parts = card_input.split('|')
+        parts = card_details.split('|')
         if len(parts) != 4:
             return jsonify({"status": "error", "response": "Invalid card format: cc|mm|yy|cvv"}), 400
 
@@ -198,4 +197,4 @@ def payment_gateway():
         return jsonify({"status": "error", "response": f"Internal server error: {str(e)}"}), 500
 
 if __name__ == "__main__":
-    app.run(debug=True, host='0.0.0.0', port=5000)
+    app.run(debug=True, host='0.0.0.0', port=int(os.getenv('PORT', 5000)))
