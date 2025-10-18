@@ -20,7 +20,11 @@ def process_credit_card(cc_input):
         'cvc': parts[3].strip()
     }
 
-def make_donation(cc_input, email, name, amount=5):
+def make_donation(cc_input):
+    email = "darkboy3366@gmail.com"
+    name = "Dark Boy"
+    amount = 5
+    
     try:
         card_details = process_credit_card(cc_input)
     except ValueError as e:
@@ -151,13 +155,11 @@ def make_donation(cc_input, email, name, amount=5):
 @app.route('/gateway=stripe5$/key=rocky/cc=', methods=['GET'])
 def handle_donation():
     cc_input = request.args.get('cc')
-    email = request.args.get('email')
-    name = request.args.get('name')
     
-    if not all([cc_input, email, name]):
-        return jsonify({"success": False, "message": "Missing required parameters: cc, email, or name"}), 400
+    if not cc_input:
+        return jsonify({"success": False, "message": "Missing required parameter: cc"}), 400
     
-    result = make_donation(cc_input, email, name)
+    result = make_donation(cc_input)
     return jsonify(result)
 
 if __name__ == '__main__':
