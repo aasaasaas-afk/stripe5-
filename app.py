@@ -3,6 +3,7 @@ import random
 import string
 import json
 import logging
+import sys
 from flask import Flask, jsonify, request
 from urllib.parse import unquote
 
@@ -99,7 +100,7 @@ def make_donation(cc_input, email, name, amount=5):
                 return {
                     "success": False,
                     "message": "Stripe payment method creation failed",
-                    "response": stripe_response.text or {}
+                    "response": stripe_response.text or "No response body"
                 }
         
         payment_method = stripe_response.json()
@@ -175,18 +176,18 @@ def make_donation(cc_input, email, name, amount=5):
             try:
                 response_data = donation_response.json()
                 error_message = response_data.get('error', {}).get('message', 'Donation submission failed')
-                logger.error(f"Donation API error: {error_message}, response: {donation_response.text}")
+                logger.error(f"Donation API error: {error_message}, status: {donation_response.status_code}, response: {donation_response.text}")
                 return {
                     "success": False,
                     "message": error_message,
                     "response": json.dumps(response_data)
                 }
             except json.JSONDecodeError:
-                logger.error(f"Donation API non-JSON response: {donation_response.text}")
+                logger.error(f"Donation API non-JSON response: {donation_response.text}, status: {donation_response.status_code}")
                 return {
                     "success": False,
                     "message": "Donation submission failed",
-                    "response": donation_response.text or {}
+                    "response": donation_response.text or "No response body"
                 }
             
     except Exception as e:
