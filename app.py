@@ -27,7 +27,7 @@ def process_credit_card(cc_input):
         'cvc': parts[3].strip()
     }
 
-def make_donation(cc_input, email, name, amount=1):
+def make_donation(cc_input, email, name, amount=5):
     try:
         card_details = process_credit_card(cc_input)
     except ValueError as e:
@@ -153,7 +153,7 @@ def make_donation(cc_input, email, name, amount=1):
         )
         
         if donation_response.status_code == 200:
-            return {"status": "charged", "message": f"Donation of ${amount} successful"}
+            return {"status": "charged", "message": "Donation successful"}
         else:
             try:
                 response_data = donation_response.json()
@@ -165,22 +165,13 @@ def make_donation(cc_input, email, name, amount=1):
     except Exception as e:
         return {"status": "declined", "message": f"An error occurred: {str(e)}"}
 
-@app.route('/gateway=stripeautocharge/key=rocky/amt=<amount>/cc=<cc>', methods=['GET'])
-def handle_donation(amount, cc):
+@app.route('/gateway=stripe5$/key=rocky/cc=<cc>', methods=['GET'])
+def handle_donation(cc):
     try:
         # Decode the cc parameter to handle URL-encoded characters
         decoded_cc = unquote(cc)
-        # Convert amount to integer and validate
-        try:
-            amount = int(amount)
-            if amount < 1:
-                raise ValueError("Amount must be at least 1")
-        except ValueError as e:
-            logger.error(f"Invalid amount: {amount}")
-            return jsonify({"status": "declined", "message": f"Invalid amount: {str(e)}"}), 400
-        
-        logger.info(f"Received request with cc: {decoded_cc}, amount: {amount}")
-        result = make_donation(decoded_cc, "darkboy3366@gmail.com", "Dark Boy", amount)
+        logger.info(f"Received request with cc: {decoded_cc}")
+        result = make_donation(decoded_cc, "darkboy3366@gmail.com", "Dark Boy")
         return jsonify(result)
     except Exception as e:
         logger.error(f"Server error: {str(e)}")
