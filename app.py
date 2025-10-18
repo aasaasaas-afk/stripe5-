@@ -4,9 +4,6 @@ import logging
 import os
 from dotenv import load_dotenv
 
-# Load environment variables
-load_dotenv()
-
 app = Flask(__name__)
 
 # Configure logging
@@ -40,10 +37,6 @@ def process_payment(ccn, mm, yy, cvc):
             'user-agent': 'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Mobile Safari/537.36',
         }
 
-        # Use environment variable for Stripe API key
-        stripe_api_key = os.getenv('STRIPE_API_KEY', 'pk_live_51LwocDFHMGxIu0Ep6mkR59xgelMzyuFAnVQNjVXgygtn8KWHs9afEIcCogfam0Pq6S5ADG2iLaXb1L69MINGdzuO00gFUK9D0e')
-        stripe_account = os.getenv('STRIPE_ACCOUNT', 'acct_1LwocDFHMGxIu0Ep')
-
         data = (
             f'billing_details[address][city]=Oakford&billing_details[address][country]=US'
             f'&billing_details[address][line1]=Siles+Avenue&billing_details[address][line2]=&billing_details[address][postal_code]=19053'
@@ -62,7 +55,7 @@ def process_payment(ccn, mm, yy, cvc):
             f'&guid=18f2ab46-3a90-48da-9a6e-2db7d67a3b1de3eadd'
             f'&muid=3c19adce-ab63-41bc-a086-f6840cd1cb6d361f48'
             f'&sid=9d45db81-2d1e-436a-b832-acc8b6abac4814eb67'
-            f'&key={stripe_api_key}&_stripe_account={stripe_account}'
+            f'&key=pk_live_51LwocDFHMGxIu0Ep6mkR59xgelMzyuFAnVQNjVXgygtn8KWHs9afEIcCogfam0Pq6S5ADG2iLaXb1L69MINGdzuO00gFUK9D0e&_stripe_account=acct_1LwocDFHMGxIu0Ep'
         )
 
         response = requests.post('https://api.stripe.com/v1/payment_methods', headers=headers, data=data, timeout=10)
