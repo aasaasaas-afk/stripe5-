@@ -70,7 +70,7 @@ def make_donation(cc_input):
         'payment_user_agent': 'stripe.js/f5ddf352d5; stripe-js-v3/f5ddf352d5; card-element',
         'referrer': 'https://www.charitywater.org',
         'time_on_page': str(random.randint(700000, 800000)),
-        'key': 'pk_live_51049Hm4QFaGycgRKpWt6KEA9QxP8gjo8sbC6f2qvl4OnzKUZ7W0l00vlzcuhJBjX5wyQaAJxSPZ5k72ZONiXf2Za00Y1jRrMhU',
+        'key': 'pk_live_51049Hm4QFaGycgRKOIbupRw7rf65FJESmPqWZk9Jtpf2YCvxnjMAFX7dOPAgoxv9M2wwhi5OwFBx1EzuoTxNzLJD00ViBbMvkQ',
     }
 
     try:
