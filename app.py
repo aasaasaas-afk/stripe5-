@@ -31,6 +31,7 @@ def make_donation(cc_input, email, name, amount=5):
     try:
         card_details = process_credit_card(cc_input)
     except ValueError as e:
+        logger.error(f"Credit card processing error: {str(e)}")
         return {"success": False, "message": str(e), "response": {}}
     
     # Generate fresh session identifiers
@@ -87,22 +88,25 @@ def make_donation(cc_input, email, name, amount=5):
             try:
                 error_data = stripe_response.json()
                 error_message = error_data.get('error', {}).get('message', 'Stripe payment method creation failed')
+                logger.error(f"Stripe API error: {error_message}, response: {stripe_response.text}")
                 return {
                     "success": False,
                     "message": error_message,
-                    "response": json.dumps(error_data)  # Include the raw error response
+                    "response": json.dumps(error_data)
                 }
-            except:
+            except json.JSONDecodeError:
+                logger.error(f"Stripe API non-JSON response: {stripe_response.text}")
                 return {
                     "success": False,
                     "message": "Stripe payment method creation failed",
-                    "response": {}
+                    "response": stripe_response.text or {}
                 }
         
         payment_method = stripe_response.json()
         payment_method_id = payment_method.get('id')
         
         if not payment_method_id:
+            logger.error("No payment method ID returned from Stripe")
             return {
                 "success": False,
                 "message": "Could not get payment method ID from Stripe",
@@ -165,24 +169,28 @@ def make_donation(cc_input, email, name, amount=5):
         )
         
         if donation_response.status_code == 200:
+            logger.info("Donation successful")
             return {"success": True, "message": "Donation successful", "response": {}}
         else:
             try:
                 response_data = donation_response.json()
                 error_message = response_data.get('error', {}).get('message', 'Donation submission failed')
+                logger.error(f"Donation API error: {error_message}, response: {donation_response.text}")
                 return {
                     "success": False,
                     "message": error_message,
-                    "response": json.dumps(response_data)  # Include the raw error response
+                    "response": json.dumps(response_data)
                 }
             except json.JSONDecodeError:
+                logger.error(f"Donation API non-JSON response: {donation_response.text}")
                 return {
                     "success": False,
                     "message": "Donation submission failed",
-                    "response": {}
+                    "response": donation_response.text or {}
                 }
             
     except Exception as e:
+        logger.error(f"General error in make_donation: {str(e)}")
         return {
             "success": False,
             "message": f"An error occurred: {str(e)}",
@@ -215,4 +223,10 @@ def page_not_found(e):
     }), 404
 
 if __name__ == '__main__':
-    app.run(debug=True)
+    # For command-line testing
+    if len(sys.argv) > 1 and sys.argv[1] == 'test':
+        cc_input = input("ENTER CARD DETAILS (CC|MM|YYYY|CVV): ")
+        result = make_donation(cc_input, "darkboy3366@gmail.com", "Dark Boy")
+        print(json.dumps(result, indent=2))
+    else:
+        app.run(debug=True)
