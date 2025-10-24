@@ -91,7 +91,7 @@ cookie_sets = [original_cookies, new_cookies_1, new_cookies_2]
 def generate_random_string(length=10):
     """Generate a random string for session IDs"""
     chars = string.ascii_letters + string.digits
-    return ''.join(random.choice(chars) for _ in range(length))
+    return ''.join(random.choice(chars) for _ in range(chars))
 
 def process_payment_flask(ccn, mm, yy, cvc, cookies):
     start_time = time.time()
@@ -369,7 +369,7 @@ def process_payment_flask(ccn, mm, yy, cvc, cookies):
             "time_taken": f"{time_taken:.2f} seconds"
         }
 
-@app.route('/gateway=b3/cc=<card_details>')
+@app.route('/gateway=b3/cc')
 def gateway_endpoint():
     global current_cookie_index, last_request_time, lock
     
