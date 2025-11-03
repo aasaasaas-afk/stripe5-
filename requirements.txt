@@ -4,3 +4,4 @@ gunicorn==20.1.0
 Werkzeug==2.0.3
 python-dotenv
 aiohttp
+beautifulsoup4
