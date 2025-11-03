@@ -6,12 +6,17 @@ from urllib.parse import urlparse
 from flask import Flask, request, jsonify
 import nest_asyncio
 from concurrent.futures import ThreadPoolExecutor
+import logging
 
 # Apply nest_asyncio to allow nested event loops
 nest_asyncio.apply()
 
 # Initialize Flask app
 app = Flask(__name__)
+
+# Set up logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 # CMS patterns
 CMS_PATTERNS = {
@@ -89,7 +94,17 @@ session: aiohttp.ClientSession = None
 async def init_session():
     global session
     if session is None or session.closed:
-        session = aiohttp.ClientSession()
+        # Create a connector with custom SSL settings
+        connector = aiohttp.TCPConnector(
+            ssl=False,  # Disable SSL verification for testing
+            limit=100,
+            limit_per_host=10,
+            ttl_dns_cache=300,
+            use_dns_cache=True,
+        )
+        # Set a custom timeout
+        timeout = aiohttp.ClientTimeout(total=30, connect=10)
+        session = aiohttp.ClientSession(connector=connector, timeout=timeout)
 
 async def close_session():
     global session
@@ -99,13 +114,20 @@ async def close_session():
 # --- Fetch site ---
 async def fetch_site(url: str):
     await init_session()
+    
+    # Clean up the URL
+    url = url.strip()
     if not url.startswith(("http://", "https://")):
         url = "https://" + url
+    
+    # Remove trailing slash if present
+    if url.endswith("/"):
+        url = url[:-1]
+    
     domain = urlparse(url).netloc
+    logger.info(f"Fetching site: {url}")
 
     headers = {
-        "authority": domain,
-        "scheme": "https",
         "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
         "accept-language": "en-US,en;q=0.9",
         "cache-control": "max-age=0",
@@ -123,11 +145,19 @@ async def fetch_site(url: str):
     }
 
     try:
-        async with session.get(url, headers=headers, timeout=15) as resp:
+        async with session.get(url, headers=headers, allow_redirects=True) as resp:
             text = await resp.text()
+            logger.info(f"Successfully fetched {url} with status {resp.status}")
             return resp.status, text, resp.headers
-    except Exception:
-        return None, None, None
+    except aiohttp.ClientError as e:
+        logger.error(f"Client error when fetching {url}: {str(e)}")
+        return None, None, {"error": f"Client error: {str(e)}"}
+    except asyncio.TimeoutError:
+        logger.error(f"Timeout when fetching {url}")
+        return None, None, {"error": "Request timeout"}
+    except Exception as e:
+        logger.error(f"Unexpected error when fetching {url}: {str(e)}")
+        return None, None, {"error": f"Unexpected error: {str(e)}"}
 
 # --- Detection functions ---
 def detect_cms(html: str):
@@ -227,9 +257,12 @@ async def scan_site(url: str):
     status, html, headers = await fetch_site(url)
     
     if not html:
+        error_msg = "Unknown error"
+        if headers and "error" in headers:
+            error_msg = headers["error"]
         return {
             "success": False,
-            "error": f"Cannot access {url}"
+            "error": f"Cannot access {url}. {error_msg}"
         }
 
     cms = detect_cms(html)
@@ -274,6 +307,15 @@ def gateway():
 @app.route('/health', methods=['GET'])
 def health():
     return jsonify({"status": "healthy"})
+
+# --- Welcome endpoint ---
+@app.route('/', methods=['GET'])
+def welcome():
+    return jsonify({
+        "message": "Welcome to Nexus Gateway Checker API",
+        "usage": "Use /gateway?url={site_url} to check a website",
+        "example": "nexus.cxchk.site/gateway?url=example.com"
+    })
 
 # --- Main function ---
 if __name__ == '__main__':
