@@ -5,16 +5,15 @@ from bs4 import BeautifulSoup
 from urllib.parse import urlparse
 from flask import Flask, request, jsonify
 import nest_asyncio
-from concurrent.futures import ThreadPoolExecutor
 import logging
 
-# Apply nest_asyncio to allow nested event loops
+# Apply nest_asyncio to allow nested event loops (important for some environments)
 nest_asyncio.apply()
 
 # Initialize Flask app
 app = Flask(__name__)
 
-# Set up logging
+# Set up logging to see errors in your server logs
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -40,11 +39,6 @@ CMS_PATTERNS = {
     'Kentico': r'cms/getresource\.ashx|kentico\.js/',
     'Episerver': r'episerver/|episerver\.js/',
     'Custom CMS': r'(?:<meta name="generator" content="([^"]+)")'
-}
-
-# Security patterns
-SECURITY_PATTERNS = {
-    '3D Secure': r'3d_secure|threed_secure|secure_redirect',
 }
 
 # Payment gateways list
@@ -88,33 +82,8 @@ PAYMENT_GATEWAYS = [
     "Discover Network", "UnionPay", "JCB Payment Gateway",
 ]
 
-# --- Shared aiohttp session ---
-session: aiohttp.ClientSession = None
-
-async def init_session():
-    global session
-    if session is None or session.closed:
-        # Create a connector with custom SSL settings
-        connector = aiohttp.TCPConnector(
-            ssl=False,  # Disable SSL verification for testing
-            limit=100,
-            limit_per_host=10,
-            ttl_dns_cache=300,
-            use_dns_cache=True,
-        )
-        # Set a custom timeout
-        timeout = aiohttp.ClientTimeout(total=30, connect=10)
-        session = aiohttp.ClientSession(connector=connector, timeout=timeout)
-
-async def close_session():
-    global session
-    if session and not session.closed:
-        await session.close()
-
 # --- Fetch site ---
-async def fetch_site(url: str):
-    await init_session()
-    
+async def fetch_site(session: aiohttp.ClientSession, url: str):
     # Clean up the URL
     url = url.strip()
     if not url.startswith(("http://", "https://")):
@@ -124,7 +93,6 @@ async def fetch_site(url: str):
     if url.endswith("/"):
         url = url[:-1]
     
-    domain = urlparse(url).netloc
     logger.info(f"Fetching site: {url}")
 
     headers = {
@@ -145,7 +113,7 @@ async def fetch_site(url: str):
     }
 
     try:
-        async with session.get(url, headers=headers, allow_redirects=True) as resp:
+        async with session.get(url, headers=headers, timeout=15) as resp:
             text = await resp.text()
             logger.info(f"Successfully fetched {url} with status {resp.status}")
             return resp.status, text, resp.headers
@@ -171,16 +139,9 @@ def detect_cms(html: str):
 
 def detect_security(html: str):
     patterns_3ds = [
-        r'3d\s*secure',
-        r'verified\s*by\s*visa',
-        r'mastercard\s*securecode',
-        r'american\s*express\s*safekey',
-        r'3ds',
-        r'3ds2',
-        r'acsurl',
-        r'pareq',
-        r'three-domain-secure',
-        r'secure_redirect',
+        r'3d\s*secure', r'verified\s*by\s*visa', r'mastercard\s*securecode',
+        r'american\s*express\s*safekey', r'3ds', r'3ds2', r'acsurl',
+        r'pareq', r'three-domain-secure', r'secure_redirect',
     ]
     for pattern in patterns_3ds:
         if re.search(pattern, html, re.IGNORECASE):
@@ -190,7 +151,6 @@ def detect_security(html: str):
 def detect_gateways(html: str):
     detected = []
     for gateway in PAYMENT_GATEWAYS:
-        # Use word boundaries to avoid partial matches (e.g., "PayU" in "PayUmoney")
         pattern = r'\b' + re.escape(gateway) + r'\b'
         if re.search(pattern, html, re.IGNORECASE):
             detected.append(gateway)
@@ -211,33 +171,13 @@ def detect_cloudflare(html: str, headers=None, status=None):
         headers = {}
     lower_keys = [k.lower() for k in headers.keys()]
     server = headers.get('Server', '').lower()
-    # Check for Cloudflare presence (CDN or protection)
-    cloudflare_indicators = [
-        r'cloudflare',
-        r'cf-ray',
-        r'cf-cache-status',
-        r'cf-browser-verification',
-        r'__cfduid',
-        r'cf_chl_',
-        r'checking your browser',
-        r'enable javascript and cookies',
-        r'ray id',
-        r'ddos protection by cloudflare',
-    ]
-    # Check headers for Cloudflare signatures
+    cloudflare_indicators = [r'cloudflare', r'cf-ray', r'cf-cache-status', r'cf-browser-verification', r'__cfduid', r'cf_chl_', r'checking your browser', r'enable javascript and cookies', r'ray id', r'ddos protection by cloudflare']
+    
     if 'cf-ray' in lower_keys or 'cloudflare' in server or 'cf-cache-status' in lower_keys:
-        # Parse HTML to check for verification/challenge page
         soup = BeautifulSoup(html, 'html.parser')
         title = soup.title.string.strip().lower() if soup.title else ''
-        challenge_indicators = [
-            "just a moment",
-            "attention required",
-            "checking your browser",
-            "enable javascript and cookies to continue",
-            "ddos protection by cloudflare",
-            "please wait while we verify",
-        ]
-        # Check for challenge page indicators
+        challenge_indicators = ["just a moment", "attention required", "checking your browser", "enable javascript and cookies to continue", "ddos protection by cloudflare", "please wait while we verify"]
+        
         if any(indicator in title for indicator in challenge_indicators):
             return "Cloudflare Verification Detected"
         if any(re.search(pattern, html, re.IGNORECASE) for pattern in cloudflare_indicators):
@@ -252,36 +192,39 @@ def detect_graphql(html: str):
         return "GraphQL Detected"
     return "No GraphQL Detected"
 
-# --- Worker for background scanning ---
+# --- Main scanning worker ---
 async def scan_site(url: str):
-    status, html, headers = await fetch_site(url)
+    # Create a new session for this specific request to avoid event loop issues
+    # The 'async with' block ensures the session is properly closed
+    connector = aiohttp.TCPConnector(ssl=False, limit=100, limit_per_host=10)
+    timeout = aiohttp.ClientTimeout(total=30, connect=10)
     
-    if not html:
-        error_msg = "Unknown error"
-        if headers and "error" in headers:
-            error_msg = headers["error"]
+    async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
+        status, html, headers = await fetch_site(session, url)
+        
+        if not html:
+            error_msg = "Unknown error"
+            if headers and "error" in headers:
+                error_msg = headers["error"]
+            return {"success": False, "error": f"Cannot access {url}. {error_msg}"}
+
+        cms = detect_cms(html)
+        security = detect_security(html)
+        gateways = detect_gateways(html)
+        captcha = detect_captcha(html)
+        cloudflare = detect_cloudflare(html, headers=headers, status=status)
+        graphql = detect_graphql(html)
+
         return {
-            "success": False,
-            "error": f"Cannot access {url}. {error_msg}"
+            "success": True,
+            "url": url,
+            "cms": cms,
+            "gateways": gateways,
+            "captcha": captcha,
+            "cloudflare": cloudflare,
+            "security": security,
+            "graphql": graphql
         }
-
-    cms = detect_cms(html)
-    security = detect_security(html)
-    gateways = detect_gateways(html)
-    captcha = detect_captcha(html)
-    cloudflare = detect_cloudflare(html, headers=headers, status=status)
-    graphql = detect_graphql(html)
-
-    return {
-        "success": True,
-        "url": url,
-        "cms": cms,
-        "gateways": gateways,
-        "captcha": captcha,
-        "cloudflare": cloudflare,
-        "security": security,
-        "graphql": graphql
-    }
 
 # --- API endpoint ---
 @app.route('/gateway', methods=['GET'])
@@ -294,13 +237,14 @@ def gateway():
             "error": "URL parameter is required"
         }), 400
     
-    # Run the async function in the event loop
+    # Run the async function in a new event loop for this request
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     try:
         result = loop.run_until_complete(scan_site(url))
         return jsonify(result)
     finally:
+        # Always close the loop to free up resources
         loop.close()
 
 # --- Health check endpoint ---
@@ -319,4 +263,5 @@ def welcome():
 
 # --- Main function ---
 if __name__ == '__main__':
+    # Use 0.0.0.0 to make it accessible from outside the container
     app.run(host='0.0.0.0', port=5000)
