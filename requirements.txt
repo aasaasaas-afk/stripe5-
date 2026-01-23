@@ -5,3 +5,4 @@ beautifulsoup4
 nest_asyncio
 requests
 faker
+fake_useragent
