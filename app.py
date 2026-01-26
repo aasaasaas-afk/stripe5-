@@ -331,7 +331,7 @@ def process_card_enhanced(domain, ccx, proxy=None, use_registration=True):
                     if data_status == 'requires_action':
                         logger.debug("3D authentication required")
                         return {
-                            "response": "3D authentication required",
+                            "response": "Your card was declined.",
                             "status": "DECLINED",
                             "cc": ccx,
                             "proxy": proxy_status
@@ -339,7 +339,7 @@ def process_card_enhanced(domain, ccx, proxy=None, use_registration=True):
                     elif data_status == 'succeeded':
                         logger.debug("Payment succeeded")
                         return {
-                            "response": "PAYMENT_ADDED",
+                            "response": "Payment method added.",
                             "status": "APPROVED",
                             "cc": ccx,
                             "proxy": proxy_status
