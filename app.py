@@ -367,7 +367,7 @@ def process_card_enhanced(domain, ccx, proxy=None, use_registration=True):
                 if setup_data.get('status') in ['succeeded', 'success']:
                     logger.debug("Payment succeeded")
                     return {
-                        "response": "PAYMENT_ADDED",
+                        "response": "Payment method added.",
                         "status": "APPROVED",
                         "cc": ccx,
                         "proxy": proxy_status
